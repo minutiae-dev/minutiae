@@ -1,0 +1,12 @@
+{
+  "name": "minutiae-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter minutiae tauri dev",
+    "build": "pnpm --filter minutiae tauri build",
+    "sidecar:build": "scripts/build-sidecar.sh",
+    "sidecar:build:release": "scripts/build-sidecar.sh release",
+    "test:engine": "swift test --package-path engine",
+    "test:core": "cargo test --manifest-path app/src-tauri/Cargo.toml"
+  }
+}

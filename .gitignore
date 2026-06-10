@@ -1,0 +1,19 @@
+# Node
+node_modules/
+dist/
+
+# Rust
+target/
+
+# Swift
+.build/
+.swiftpm/
+
+# Tauri sidecar binaries (built by scripts/build-sidecar.sh)
+app/src-tauri/binaries/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
