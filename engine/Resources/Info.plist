@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.minutiae.engine</string>
+	<key>CFBundleName</key>
+	<string>minutiae-engine</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Minutiae records your microphone during meetings to transcribe what you say. Audio never leaves this Mac.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Minutiae records system audio during meetings to transcribe the other participants. Audio never leaves this Mac.</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.4</string>
+</dict>
+</plist>

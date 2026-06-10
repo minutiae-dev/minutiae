@@ -11,7 +11,7 @@ sessions/2026-06-10T14-30-22Z--01J9XYZ…/    # <started_at, filesystem-safe>--<
 └── scratchpad.md           # M2+; missing = empty
 ```
 
-During capture, audio is written as append-only WAV (`audio-me.wav.part`, `audio-them.wav.part`) for crash safety, then transcoded to Opus/CAF on stop. `transcript.json` is flushed incrementally (write-temp-then-rename) every 20 segments or 10 s, so a crash loses ≤ 10 s of text.
+During capture, audio is written as append-only WAV (`audio-me.part.wav`, `audio-them.part.wav` — the `.wav` extension must be last so AVAudioFile infers the container) for crash safety, then transcoded to Opus/CAF on stop. `transcript.json` is flushed incrementally (write-temp-then-rename) every 20 segments or 10 s, so a crash loses ≤ 10 s of text.
 
 ## session.json
 

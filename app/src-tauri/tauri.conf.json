@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Minutiae",
+  "version": "0.1.0",
+  "identifier": "com.minutiae.app",
+  "build": {
+    "beforeDevCommand": "bash ../scripts/build-sidecar.sh && pnpm dev",
+    "beforeBuildCommand": "bash ../scripts/build-sidecar.sh release && pnpm build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Minutiae",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 720,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "externalBin": ["binaries/minutiae-engine"],
+    "macOS": {
+      "minimumSystemVersion": "14.4",
+      "entitlements": "./Entitlements.plist"
+    }
+  }
+}
