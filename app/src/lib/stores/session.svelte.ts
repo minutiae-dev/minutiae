@@ -2,6 +2,7 @@
 
 import {
   getState,
+  isTauri,
   listDevices,
   listenAppError,
   listenLevels,
@@ -56,6 +57,18 @@ export class SessionStore {
   async init(): Promise<void> {
     if (this.#initialized) return;
     this.#initialized = true;
+
+    if (!isTauri()) {
+      this.lastError = {
+        code: "internal",
+        message:
+          "No Tauri backend on this page. Run `pnpm dev` from the repo root " +
+          "(or `pnpm tauri dev` from app/) — `vite` alone serves the UI " +
+          "without the app behind it.",
+        fatal: true,
+      };
+      return;
+    }
 
     this.#unlisteners = await Promise.all([
       listenSession((p) => this.#onState(p)),
