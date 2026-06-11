@@ -22,6 +22,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub enum CoreMessage {
     /// First message after spawn.
     Hello { v: u32, id: String },
+    /// Ensure the engine's ASR models are downloaded, compiled and loaded.
+    /// Idempotent. Progress streams as `model_progress`; completion is the
+    /// correlated `models_ready` response, failure an `error`.
+    PrepareModels { v: u32, id: String },
     /// Input (mic) devices.
     ListDevices { v: u32, id: String },
     StartSession {
@@ -47,6 +51,13 @@ pub enum CoreMessage {
 impl CoreMessage {
     pub fn hello(id: impl Into<String>) -> Self {
         Self::Hello {
+            v: PROTOCOL_VERSION,
+            id: id.into(),
+        }
+    }
+
+    pub fn prepare_models(id: impl Into<String>) -> Self {
+        Self::PrepareModels {
             v: PROTOCOL_VERSION,
             id: id.into(),
         }
@@ -103,6 +114,7 @@ impl CoreMessage {
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::Hello { id, .. }
+            | Self::PrepareModels { id, .. }
             | Self::ListDevices { id, .. }
             | Self::StartSession { id, .. }
             | Self::StopSession { id, .. }
@@ -126,6 +138,8 @@ pub enum EngineMessage {
         engine_versions: BTreeMap<String, String>,
         models_ready: bool,
     },
+    /// Correlated response to `prepare_models`: models are now ready.
+    ModelsReady { v: u32, id: String },
     Devices {
         v: u32,
         id: String,
@@ -188,6 +202,7 @@ impl EngineMessage {
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::HelloAck { id, .. }
+            | Self::ModelsReady { id, .. }
             | Self::Devices { id, .. }
             | Self::SessionStarted { id, .. }
             | Self::SessionStopped { id, .. }
@@ -308,6 +323,7 @@ mod tests {
     #[test]
     fn round_trip_every_core_message() {
         rt_core(CoreMessage::hello("01J1"));
+        rt_core(CoreMessage::prepare_models("01J1B"));
         rt_core(CoreMessage::list_devices("01J2"));
         rt_core(CoreMessage::start_session(
             "01J3",
@@ -333,6 +349,10 @@ mod tests {
                 "0.15.2".to_string(),
             )]),
             models_ready: true,
+        });
+        rt_engine(EngineMessage::ModelsReady {
+            v: 1,
+            id: "01J1B".into(),
         });
         rt_engine(EngineMessage::Devices {
             v: 1,
@@ -485,6 +505,26 @@ mod tests {
             serde_json::to_value(&msg).unwrap(),
             serde_json::from_str::<Value>(wire).unwrap()
         );
+    }
+
+    #[test]
+    fn wire_shape_prepare_models_and_models_ready() {
+        let req = CoreMessage::prepare_models("01JPREP");
+        assert_eq!(
+            serde_json::to_value(&req).unwrap(),
+            serde_json::from_str::<Value>(r#"{"v":1,"type":"prepare_models","id":"01JPREP"}"#)
+                .unwrap()
+        );
+        let ack = EngineMessage::ModelsReady {
+            v: 1,
+            id: "01JPREP".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&ack).unwrap(),
+            serde_json::from_str::<Value>(r#"{"v":1,"type":"models_ready","id":"01JPREP"}"#).unwrap()
+        );
+        // and the response id() correlates back to the request
+        assert_eq!(ack.id(), Some("01JPREP"));
     }
 
     #[test]

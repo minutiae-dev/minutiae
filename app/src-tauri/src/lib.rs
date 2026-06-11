@@ -28,6 +28,7 @@ pub fn run() {
             commands::list_devices,
             commands::start_session,
             commands::stop_session,
+            commands::prepare_models,
             commands::get_state,
         ])
         .run(tauri::generate_context!())

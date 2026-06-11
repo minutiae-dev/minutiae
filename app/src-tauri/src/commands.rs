@@ -31,6 +31,18 @@ pub async fn stop_session(
     manager.stop_session().await.map_err(|e| e.to_string())
 }
 
+/// Retry the launch-time model download after a failure. The download is
+/// kicked off automatically at startup; this backs a UI "Retry" button.
+#[tauri::command]
+pub async fn prepare_models(
+    manager: State<'_, SidecarManager>,
+) -> Result<(), String> {
+    manager
+        .retry_prepare_models()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn get_state(manager: State<'_, SidecarManager>) -> AppStateSnapshot {
     manager.snapshot()

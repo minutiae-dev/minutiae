@@ -40,6 +40,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 /// Stop includes the Opus transcode of potentially hours of audio.
 const STOP_TIMEOUT: Duration = Duration::from_secs(120);
+/// First-run model download + CoreML compile; generous ceiling (pings keep the
+/// engine alive concurrently, so a legitimate slow download is not killed).
+const PREPARE_TIMEOUT: Duration = Duration::from_secs(1800);
 const BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(10);
 
@@ -75,6 +78,9 @@ struct EngineLink {
     current_op: Option<String>,
     outstanding_pings: u32,
     models_ready: bool,
+    /// A `prepare_models` request is in flight (guards against the launch
+    /// auto-prepare and a manual retry racing each other).
+    preparing: bool,
 }
 
 struct Shared {
@@ -223,6 +229,15 @@ impl SidecarManager {
                 Err(e)
             }
         }
+    }
+
+    /// Re-attempt the launch-time model download (for a UI "Retry" affordance
+    /// after a failed first-run download).
+    pub async fn retry_prepare_models(&self) -> Result<(), SidecarError> {
+        // ensure_models_ready surfaces its own outcome via model:ready /
+        // app:error events; the command just kicks it off.
+        ensure_models_ready(self.shared.clone()).await;
+        Ok(())
     }
 
     pub fn snapshot(&self) -> events::AppStateSnapshot {
@@ -376,6 +391,59 @@ async fn request(
     }
 }
 
+/// Ensure the engine's ASR models are downloaded, compiled and loaded. Sends
+/// `prepare_models` and awaits the correlated `models_ready`, streaming
+/// `model_progress` to the UI meanwhile. Idempotent and single-flighted: a
+/// no-op when already ready or a prepare is in flight. Emits `model:ready` on
+/// success, `app:error` on failure.
+async fn ensure_models_ready(shared: Arc<Shared>) {
+    {
+        let mut engine = shared.engine.lock().unwrap();
+        if engine.models_ready || engine.preparing {
+            return;
+        }
+        engine.preparing = true;
+    }
+    tracing::info!("preparing ASR models (download/compile if needed)");
+
+    let msg = CoreMessage::prepare_models(new_id());
+    let result = request(&shared, msg, PREPARE_TIMEOUT, true).await;
+
+    shared.engine.lock().unwrap().preparing = false;
+
+    match result {
+        Ok(EngineMessage::ModelsReady { .. }) => {
+            shared.engine.lock().unwrap().models_ready = true;
+            tracing::info!("ASR models ready");
+            let _ = shared
+                .app
+                .emit(events::MODEL_READY, events::ModelReadyPayload { ready: true });
+        }
+        Ok(EngineMessage::Error { code, message, .. }) => {
+            // already surfaced to the UI by handle_message; just log
+            tracing::warn!(?code, "model preparation failed: {message}");
+        }
+        Ok(_) => {
+            emit_app_error(
+                &shared,
+                ErrorCode::ModelDownloadFailed,
+                "Unexpected response while preparing models.".to_string(),
+                false,
+            );
+        }
+        // engine died mid-prepare: the respawn's handshake re-triggers prepare
+        Err(SidecarError::EngineRestarted) => {}
+        Err(e) => {
+            emit_app_error(
+                &shared,
+                ErrorCode::ModelDownloadFailed,
+                format!("Could not prepare the transcription model: {e}"),
+                false,
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Supervisor
 
@@ -416,6 +484,7 @@ async fn run_engine(shared: &Arc<Shared>, handshake_ok: &mut bool) -> Result<(),
         engine.child = Some(child);
         engine.outstanding_pings = 0;
         engine.models_ready = false;
+        engine.preparing = false;
     }
 
     // hello/hello_ack handshake, answered inside the event loop below
@@ -453,11 +522,21 @@ async fn run_engine(shared: &Arc<Shared>, handshake_ok: &mut bool) -> Result<(),
                                         {
                                             hello_done = true;
                                             *handshake_ok = true;
+                                            let ready = *models_ready;
                                             tracing::info!(
                                                 protocol_version,
-                                                models_ready,
+                                                models_ready = ready,
                                                 "engine handshake complete"
                                             );
+                                            // Download/compile models now (at
+                                            // launch) rather than at first
+                                            // start_session, so recording is
+                                            // instant when the user is ready.
+                                            if !ready {
+                                                tauri::async_runtime::spawn(
+                                                    ensure_models_ready(shared.clone()),
+                                                );
+                                            }
                                         }
                                     }
                                     handle_message(shared, msg);
@@ -630,7 +709,8 @@ fn handle_message(shared: &Arc<Shared>, msg: EngineMessage) {
             emit_app_error(shared, code, message, fatal);
             // fatal: the engine will exit; Terminated handling respawns it.
         }
-        msg @ (EngineMessage::Devices { .. }
+        msg @ (EngineMessage::ModelsReady { .. }
+        | EngineMessage::Devices { .. }
         | EngineMessage::SessionStarted { .. }
         | EngineMessage::SessionStopped { .. }) => {
             let id = msg.id().expect("correlated responses carry an id").to_string();
@@ -661,6 +741,7 @@ fn on_engine_down(shared: &Arc<Shared>) {
         engine.current_op = None;
         engine.outstanding_pings = 0;
         engine.models_ready = false;
+        engine.preparing = false;
     }
 
     let aborted = {

@@ -124,6 +124,7 @@ public enum ModelProgressStage: String, Codable, Sendable {
 
 public enum CoreMessage: Equatable, Sendable {
     case hello(id: String)
+    case prepareModels(id: String)
     case listDevices(id: String)
     case startSession(id: String, sessionId: String, dir: String,
                       micDeviceUid: String, engine: String, language: String)
@@ -149,6 +150,8 @@ extension CoreMessage: Decodable {
         switch type {
         case "hello":
             self = .hello(id: try c.decode(String.self, forKey: .id))
+        case "prepare_models":
+            self = .prepareModels(id: try c.decode(String.self, forKey: .id))
         case "list_devices":
             self = .listDevices(id: try c.decode(String.self, forKey: .id))
         case "start_session":
@@ -180,6 +183,9 @@ extension CoreMessage: Encodable {
         case .hello(let id):
             try c.encode("hello", forKey: .type)
             try c.encode(id, forKey: .id)
+        case .prepareModels(let id):
+            try c.encode("prepare_models", forKey: .type)
+            try c.encode(id, forKey: .id)
         case .listDevices(let id):
             try c.encode("list_devices", forKey: .type)
             try c.encode(id, forKey: .id)
@@ -209,6 +215,7 @@ extension CoreMessage: Encodable {
 
 public enum EngineMessage: Equatable, Sendable {
     case helloAck(id: String, protocolVersion: Int, engineVersions: [String: String], modelsReady: Bool)
+    case modelsReady(id: String)
     case devices(id: String, items: [DeviceInfo])
     case sessionStarted(id: String, sessionId: String, t0EpochMs: Int64)
     case modelProgress(pct: Double, stage: ModelProgressStage)
@@ -244,6 +251,9 @@ extension EngineMessage: Encodable {
             try c.encode(protocolVersion, forKey: .protocolVersion)
             try c.encode(engineVersions, forKey: .engineVersions)
             try c.encode(modelsReady, forKey: .modelsReady)
+        case .modelsReady(let id):
+            try c.encode("models_ready", forKey: .type)
+            try c.encode(id, forKey: .id)
         case .devices(let id, let items):
             try c.encode("devices", forKey: .type)
             try c.encode(id, forKey: .id)
@@ -297,6 +307,8 @@ extension EngineMessage: Decodable {
                 protocolVersion: try c.decode(Int.self, forKey: .protocolVersion),
                 engineVersions: try c.decode([String: String].self, forKey: .engineVersions),
                 modelsReady: try c.decode(Bool.self, forKey: .modelsReady))
+        case "models_ready":
+            self = .modelsReady(id: try c.decode(String.self, forKey: .id))
         case "devices":
             self = .devices(
                 id: try c.decode(String.self, forKey: .id),

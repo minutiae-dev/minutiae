@@ -22,6 +22,7 @@ Lifecycle coupling: EOF on the engine's stdin means shut down cleanly (stop any 
 | type | fields | notes |
 |---|---|---|
 | `hello` | `id` | first message after spawn |
+| `prepare_models` | `id` | ensure the engine's ASR models are downloaded, compiled and loaded. Idempotent; safe to call when already ready. The core sends this automatically after the handshake when `hello_ack.models_ready` is `false`, so the download happens at launch rather than at first `start_session`. Progress streams as `model_progress`; completion is the correlated `models_ready` response, failure an `error` (`model_download_failed`). |
 | `list_devices` | `id` | input (mic) devices |
 | `start_session` | `id`, `session_id`, `dir`, `mic_device_uid`, `engine`, `language` | `dir` is an existing, writable session folder; `engine` is an engine id, e.g. `"parakeet-tdt-v3"`; `language` BCP-47-ish, e.g. `"en"` |
 | `stop_session` | `id` | stops the active session; finalization is async — completion is signalled by `session_stopped` |
@@ -32,10 +33,11 @@ Lifecycle coupling: EOF on the engine's stdin means shut down cleanly (stop any 
 
 | type | fields | notes |
 |---|---|---|
-| `hello_ack` | `id`, `protocol_version`, `engine_versions`, `models_ready` | `engine_versions: {"parakeet-tdt-v3": "<semver/model rev>"}`; `models_ready: bool` |
+| `hello_ack` | `id`, `protocol_version`, `engine_versions`, `models_ready` | `engine_versions: {"parakeet-tdt-v3": "<semver/model rev>"}`; `models_ready: bool` (models already in the local cache) |
+| `models_ready` | `id` | correlated response to `prepare_models`: models are now downloaded, compiled and loaded |
 | `devices` | `id`, `items` | `items: [{uid, name, sample_rate, is_default}]` |
 | `session_started` | `id`, `session_id`, `t0_epoch_ms` | `t0_epoch_ms` anchors session-relative seconds to wall clock |
-| `model_progress` | `pct`, `stage` | emitted during first-run model download/compile; `stage`: `"downloading" \| "compiling"` |
+| `model_progress` | `pct`, `stage` | emitted during model download/compile (driven by `prepare_models` at launch, or by `start_session` as a fallback); `stage`: `"downloading" \| "compiling"` |
 | `transcript` | `session_id`, `segment` | see Segment below |
 | `levels` | `session_id`, `me_db`, `them_db` | ~10 Hz while recording; dBFS floats (≤ 0, −120 = silence) |
 | `session_stopped` | `id`, `session_id`, `audio`, `stats` | `audio: [{channel, path, codec, container, duration_s, sample_rate}]`; `stats: {segments, dropped_windows}` |

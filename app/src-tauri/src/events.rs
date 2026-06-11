@@ -11,6 +11,7 @@ pub const SESSION_STATE: &str = "session:state";
 pub const TRANSCRIPT_SEGMENT: &str = "transcript:segment";
 pub const LEVELS_UPDATE: &str = "levels:update";
 pub const MODEL_PROGRESS: &str = "model:progress";
+pub const MODEL_READY: &str = "model:ready";
 pub const APP_ERROR: &str = "app:error";
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +38,13 @@ pub struct LevelsPayload {
 pub struct ModelProgressPayload {
     pub pct: f64,
     pub stage: String,
+}
+
+/// Fired once the ASR models finish downloading/compiling at launch. The UI
+/// gates recording until this arrives (or `get_state().models_ready` is true).
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelReadyPayload {
+    pub ready: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

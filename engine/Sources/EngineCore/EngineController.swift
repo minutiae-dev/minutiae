@@ -55,6 +55,8 @@ public final class EngineController: @unchecked Sendable {
         switch msg {
         case .hello(let id):
             handleHello(id: id)
+        case .prepareModels(let id):
+            handlePrepareModels(id: id)
         case .listDevices(let id):
             handleListDevices(id: id)
         case .startSession(let id, let sessionId, let dir, let micDeviceUid, let engine, let language):
@@ -93,6 +95,30 @@ public final class EngineController: @unchecked Sendable {
                 } catch {
                     log("ASR preload failed: \(error)")
                 }
+            }
+        }
+    }
+
+    /// Download (if needed), compile and load the ASR models, streaming
+    /// progress, then reply `models_ready`. Runs detached so the serial
+    /// message loop keeps answering pings during a multi-minute download.
+    /// prepare() is idempotent and coalesces, so this is safe to call more
+    /// than once and alongside a later start_session.
+    private func handlePrepareModels(id: String) {
+        let engine = engineFor(language: asrLanguage)
+        let transport = self.transport
+        Task.detached {
+            do {
+                try await engine.prepare { pct, stage in
+                    transport.send(.modelProgress(pct: pct * 100,
+                                                  stage: stage == "compiling" ? .compiling : .downloading))
+                }
+                transport.send(.modelsReady(id: id))
+                log("ASR models ready")
+            } catch {
+                transport.send(.error(code: .modelDownloadFailed,
+                                      message: "model download/compile failed: \(error)",
+                                      fatal: false, sessionId: nil))
             }
         }
     }

@@ -69,6 +69,10 @@ export interface ModelProgressPayload {
   stage: "downloading" | "compiling" | (string & {});
 }
 
+export interface ModelReadyPayload {
+  ready: boolean;
+}
+
 export interface AppErrorPayload {
   code: string;
   message: string;
@@ -97,6 +101,11 @@ export function stopSession(): Promise<SessionStatePayload> {
   return invoke<SessionStatePayload>("stop_session");
 }
 
+/** Retry the launch-time model download after a failure. */
+export function prepareModels(): Promise<void> {
+  return invoke<void>("prepare_models");
+}
+
 export function getState(): Promise<AppStateSnapshot> {
   return invoke<AppStateSnapshot>("get_state");
 }
@@ -108,6 +117,7 @@ export const EVENT_SESSION_STATE = "session:state";
 export const EVENT_TRANSCRIPT_SEGMENT = "transcript:segment";
 export const EVENT_LEVELS_UPDATE = "levels:update";
 export const EVENT_MODEL_PROGRESS = "model:progress";
+export const EVENT_MODEL_READY = "model:ready";
 export const EVENT_APP_ERROR = "app:error";
 
 export function listenSession(
@@ -136,6 +146,12 @@ export function listenModelProgress(
   return listen<ModelProgressPayload>(EVENT_MODEL_PROGRESS, (e) =>
     cb(e.payload),
   );
+}
+
+export function listenModelReady(
+  cb: (payload: ModelReadyPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<ModelReadyPayload>(EVENT_MODEL_READY, (e) => cb(e.payload));
 }
 
 export function listenAppError(

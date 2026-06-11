@@ -26,9 +26,20 @@
       </div>
       <span class="progress-label">
         {session.modelProgress.stage === "compiling"
-          ? "Compiling model"
-          : "Downloading model"}… {Math.round(session.modelProgress.pct)}%
+          ? "Compiling transcription model"
+          : "Downloading transcription model"}… {Math.round(session.modelProgress.pct)}%
+        <span class="once">· one-time setup</span>
       </span>
+    </div>
+  {:else if session.modelError}
+    <div class="model-prep error">
+      <span class="prep-label">Couldn’t download the transcription model. {session.modelError}</span>
+      <button class="retry" onclick={() => session.retryPrepare()}>Retry</button>
+    </div>
+  {:else if session.preparingModels && !session.modelsReady}
+    <div class="model-prep">
+      <span class="spinner" aria-hidden="true"></span>
+      <span class="prep-label">Preparing transcription model… <span class="once">one-time setup</span></span>
     </div>
   {/if}
 
@@ -110,6 +121,47 @@
   .progress-label {
     font-size: 11px;
     color: var(--text-dim);
+  }
+
+  .once {
+    opacity: 0.7;
+  }
+
+  .model-prep {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .model-prep.error {
+    color: var(--danger);
+  }
+
+  .prep-label {
+    flex: 1;
+  }
+
+  button.retry {
+    font-size: 11px;
+    padding: 2px 10px;
+  }
+
+  .spinner {
+    width: 11px;
+    height: 11px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex: none;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .error-banner {

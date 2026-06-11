@@ -7,8 +7,10 @@ import {
   listenAppError,
   listenLevels,
   listenModelProgress,
+  listenModelReady,
   listenSession,
   listenTranscript,
+  prepareModels,
   startSession,
   stopSession,
   type AppErrorPayload,
@@ -34,6 +36,12 @@ export class SessionStore {
     themDb: SILENCE_DB,
   });
   modelProgress = $state<ModelProgressPayload | null>(null);
+  /** ASR models downloaded + compiled and ready to transcribe. */
+  modelsReady = $state(false);
+  /** Set when the launch-time model download fails; backs the Retry button. */
+  modelError = $state<string | null>(null);
+  /** True while a (re)download is running. */
+  preparingModels = $state(false);
   lastError = $state<AppErrorPayload | null>(null);
   /** seconds since recording started */
   elapsed = $state(0);
@@ -45,6 +53,7 @@ export class SessionStore {
   canStart = $derived(
     (this.phase === "idle" || this.phase === "error") &&
       this.selectedMicUid !== "" &&
+      this.modelsReady &&
       !this.busy,
   );
   canStop = $derived(this.phase === "recording" && !this.busy);
@@ -77,16 +86,37 @@ export class SessionStore {
         this.levels = { meDb: p.me_db, themDb: p.them_db };
       }),
       listenModelProgress((p) => {
-        this.modelProgress = p.pct >= 100 ? null : p;
+        // Keep the bar visible until model:ready; pct cycles 0→100 per stage.
+        this.modelProgress = p;
+        this.preparingModels = true;
+        this.modelError = null;
+      }),
+      listenModelReady((p) => {
+        this.modelsReady = p.ready;
+        this.modelProgress = null;
+        this.preparingModels = false;
+        this.modelError = null;
       }),
       listenAppError((p) => {
-        this.lastError = p;
+        // Route first-run model-download failures to the dedicated, friendlier
+        // prep UI (with Retry) instead of the generic error banner.
+        if (p.code === "model_download_failed") {
+          this.modelError = p.message;
+          this.modelProgress = null;
+          this.preparingModels = false;
+        } else {
+          this.lastError = p;
+        }
       }),
     ]);
 
     try {
       const s = await getState();
       this.#applyState(s.state, s.session_id, s.t0_epoch_ms);
+      this.modelsReady = s.models_ready;
+      // The core auto-starts the download at launch; reflect that the moment
+      // the UI loads, before the first progress event arrives.
+      this.preparingModels = !s.models_ready;
     } catch (e) {
       console.error("get_state failed", e);
     }
@@ -148,6 +178,20 @@ export class SessionStore {
 
   dismissError(): void {
     this.lastError = null;
+  }
+
+  /** Retry a failed launch-time model download. */
+  async retryPrepare(): Promise<void> {
+    if (this.preparingModels || this.modelsReady) return;
+    this.modelError = null;
+    this.preparingModels = true;
+    try {
+      await prepareModels();
+    } catch (e) {
+      // A failure also arrives via app:error → modelError; this is a fallback.
+      this.modelError = String(e);
+      this.preparingModels = false;
+    }
   }
 
   #onState(p: SessionStatePayload): void {

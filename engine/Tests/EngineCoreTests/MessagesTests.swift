@@ -28,6 +28,7 @@ final class MessagesTests: XCTestCase {
 
     func testCoreMessageRoundTrips() throws {
         try roundTrip(CoreMessage.hello(id: "1"))
+        try roundTrip(CoreMessage.prepareModels(id: "1b"))
         try roundTrip(CoreMessage.listDevices(id: "2"))
         try roundTrip(CoreMessage.startSession(
             id: "3", sessionId: "01J9XYZ", dir: "/tmp/sessions/x",
@@ -41,6 +42,7 @@ final class MessagesTests: XCTestCase {
         try roundTrip(EngineMessage.helloAck(
             id: "1", protocolVersion: 1,
             engineVersions: ["parakeet-tdt-v3": "0.15.2"], modelsReady: true))
+        try roundTrip(EngineMessage.modelsReady(id: "1b"))
         try roundTrip(EngineMessage.devices(id: "2", items: [
             DeviceInfo(uid: "uid-1", name: "MacBook Pro Microphone", sampleRate: 48000, isDefault: true),
             DeviceInfo(uid: "uid-2", name: "AirPods Pro", sampleRate: 24000, isDefault: false),
@@ -84,6 +86,15 @@ final class MessagesTests: XCTestCase {
             try encodeString(msg),
             #"{"engine_versions":{"parakeet-tdt-v3":"0.15.2"},"id":"1","models_ready":true,"protocol_version":1,"type":"hello_ack","v":1}"#
         )
+    }
+
+    func testPrepareModelsAndModelsReadyWire() throws {
+        // request decodes from the doc's wire shape
+        let req = try Wire.decodeCore(Data(#"{"v":1,"type":"prepare_models","id":"p1"}"#.utf8))
+        XCTAssertEqual(req, .prepareModels(id: "p1"))
+        // response encodes to the doc's wire shape
+        XCTAssertEqual(try encodeString(.modelsReady(id: "p1")),
+                       #"{"id":"p1","type":"models_ready","v":1}"#)
     }
 
     func testStartSessionExactWireDecode() throws {
