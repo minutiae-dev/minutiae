@@ -32,8 +32,9 @@ app/artifacts/
 
 # Proprietary cloud-tier client (sync + cloud enrichment).
 # Present locally for `--features saas` / VITE_SAAS builds; absent from the public tree.
-app/src-tauri/src/saas/
-app/src/lib/saas/
+app/src-tauri/src/saas
+app/src/lib/saas
+app/tests/ui/saas
 .cargo/config.toml
 
 # macOS
@@ -41,3 +42,7 @@ app/src/lib/saas/
 
 # Logs
 *.log
+
+# Browser test artifacts (may contain meeting text).
+app/test-results/
+app/playwright-report/
