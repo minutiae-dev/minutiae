@@ -5,12 +5,36 @@ dist/
 # Rust
 target/
 
-# Swift
+# Swift / Xcode
 .build/
 .swiftpm/
+.xcode-dd/
+*.o
+*.d
+*.swiftdeps
 
-# Tauri sidecar binaries (built by scripts/build-sidecar.sh)
+# Tauri
+# sidecar binaries (scripts/build-sidecar.sh, build-llm-sidecar.sh)
 app/src-tauri/binaries/
+# schemas regenerated on every build
+app/src-tauri/gen/
+app/artifacts/
+
+# Build outputs / archives / crash reports
+*.dmg
+*.zip
+*.ips
+
+# Secrets and local environment
+.env
+.env.*
+.notarize.env
+
+# Proprietary cloud-tier client (sync + cloud enrichment).
+# Present locally for `--features saas` / VITE_SAAS builds; absent from the public tree.
+app/src-tauri/src/saas/
+app/src/lib/saas/
+.cargo/config.toml
 
 # macOS
 .DS_Store
