@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Apple Silicon runner. The engine needs Swift 6 (Xcode 16+); Xcode 16.4 is
+    # the image default on macos-15 and is pinned here so upgrades are deliberate.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: pnpm/action-setup@v4
+        # version comes from "packageManager" in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/src-tauri/target
+            engine-windows/target
+            engine/.build
+          key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock', 'engine/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-build-
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Engine tests (Swift)
+        # End-to-end and benchmark suites are opt-in via MINUTIAE_E2E / MINUTIAE_BENCH
+        # and skip themselves; nothing here downloads a model.
+        run: swift test --package-path engine
+
+      - name: Build the engine sidecar
+        # cargo build of the core needs the externalBin present.
+        run: bash scripts/build-sidecar.sh
+
+      - name: Core tests (Rust)
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml
+
+      - name: Windows sidecar tests (portable parts)
+        run: cargo test --manifest-path engine-windows/Cargo.toml
+
+      - name: UI type check
+        run: pnpm --filter minutiae check
