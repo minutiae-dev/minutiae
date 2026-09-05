@@ -10,8 +10,12 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@lucide/svelte": "^1.20.0",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-shell": "^2"
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-shell": "^2",
+    "dompurify": "^3.4.11",
+    "marked": "^18.0.5"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5",

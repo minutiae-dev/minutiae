@@ -1,15 +1,20 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window: core defaults plus permission to spawn the minutiae-engine sidecar.",
+  "description": "Default capability for the main window: core defaults plus permission to spawn the minutiae-engine (audio) and minutiae-llm (enhancement) sidecars.",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     {
       "identifier": "shell:allow-execute",
       "allow": [
         {
           "name": "binaries/minutiae-engine",
+          "sidecar": true
+        },
+        {
+          "name": "binaries/minutiae-llm",
           "sidecar": true
         }
       ]
@@ -20,10 +25,16 @@
         {
           "name": "binaries/minutiae-engine",
           "sidecar": true
+        },
+        {
+          "name": "binaries/minutiae-llm",
+          "sidecar": true
         }
       ]
     },
     "shell:allow-stdin-write",
-    "shell:allow-kill"
+    "shell:allow-kill",
+    "dialog:allow-open",
+    "dialog:allow-confirm"
   ]
 }

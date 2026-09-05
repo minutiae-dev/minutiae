@@ -255,10 +255,13 @@ impl SessionMachine {
         } else {
             wall_duration
         };
+        // The DEVICE rate, not the file's: the recording is encoded at 16 kHz
+        // regardless of what the tap delivered, and this field describes the
+        // capture device.
         let system_sample_rate = audio
             .iter()
             .find(|a| a.channel == "them")
-            .map(|a| a.sample_rate)
+            .map(|a| a.device_sample_rate())
             .unwrap_or(48_000);
 
         let session_json = SessionJson {
@@ -448,7 +451,7 @@ mod tests {
             text: text.into(),
             confidence: 0.9,
             is_final,
-            engine: "parakeet-tdt-v3".into(),
+            engine: "nemotron-streaming-ml".into(),
         }
     }
 
@@ -460,7 +463,9 @@ mod tests {
                 codec: "opus".into(),
                 container: "caf".into(),
                 duration_s: 2621.4,
-                sample_rate: 24_000,
+                // Encoded at 16 kHz from a 24 kHz AirPods mic.
+                sample_rate: 16_000,
+                source_sample_rate: Some(24_000),
             },
             AudioFileInfo {
                 channel: "them".into(),
@@ -468,7 +473,9 @@ mod tests {
                 codec: "opus".into(),
                 container: "caf".into(),
                 duration_s: 2621.4,
-                sample_rate: 48_000,
+                // Encoded at 16 kHz from the 48 kHz system tap.
+                sample_rate: 16_000,
+                source_sample_rate: Some(48_000),
             },
         ]
     }
@@ -484,7 +491,7 @@ mod tests {
         assert_eq!(m.phase(), Phase::Idle);
 
         let info = m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         assert_eq!(m.phase(), Phase::Starting);
         assert!(info.dir.is_dir());
@@ -527,7 +534,7 @@ mod tests {
         let session = read_json(&info.dir.join("session.json"));
         assert_eq!(session["schema_version"], 1);
         assert_eq!(session["session_id"], info.session_id.as_str());
-        assert_eq!(session["engine"], "parakeet-tdt-v3");
+        assert_eq!(session["engine"], "nemotron-streaming-ml");
         assert_eq!(session["language"], "en");
         assert_eq!(session["app_version"], "0.1.0");
         assert_eq!(session["duration_s"], 2621.4);
@@ -564,11 +571,11 @@ mod tests {
         assert!(m.begin_stopping().is_err());
         assert!(m.finalize(&[], Utc::now()).is_err());
 
-        m.begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+        m.begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         // can't start twice
         assert!(m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .is_err());
         // can't stop or finalize from Starting
         assert!(m.begin_stopping().is_err());
@@ -577,7 +584,7 @@ mod tests {
         m.mark_recording(1).unwrap();
         // can't start or re-mark while recording
         assert!(m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .is_err());
         assert!(m.mark_recording(2).is_err());
         // can't finalize before stopping
@@ -592,14 +599,14 @@ mod tests {
     fn restart_is_allowed_from_error() {
         let root = tempfile::tempdir().unwrap();
         let mut m = SessionMachine::new("0.1.0");
-        m.begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+        m.begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         let aborted = m.abort().unwrap();
         assert_eq!(m.phase(), Phase::Error);
         assert!(aborted.dir.is_dir());
 
         let info = m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         assert_eq!(m.phase(), Phase::Starting);
         assert_ne!(info.session_id, aborted.session_id);
@@ -610,7 +617,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut m = SessionMachine::new("0.1.0");
         let info = m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         m.mark_recording(0).unwrap();
 
@@ -630,7 +637,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut m = SessionMachine::new("0.1.0");
         let info = m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         m.mark_recording(0).unwrap();
 
@@ -651,7 +658,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut m = SessionMachine::new("0.1.0");
         let info = m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         m.mark_recording(0).unwrap();
 
@@ -675,7 +682,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut m = SessionMachine::new("0.1.0");
         let info = m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         m.mark_recording(0).unwrap();
         for i in 0..3 {
@@ -702,7 +709,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut m = SessionMachine::new("0.1.0");
         let info = m
-            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .begin_starting(root.path(), mic(), "nemotron-streaming-ml", "en")
             .unwrap();
         m.mark_recording(0).unwrap();
         m.begin_stopping().unwrap();

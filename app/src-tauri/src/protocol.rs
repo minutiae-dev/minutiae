@@ -14,6 +14,12 @@ use std::collections::BTreeMap;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Default "them" source: the system-audio process tap.
+pub const THEM_SOURCE_SYSTEM: &str = "system";
+fn them_source_system() -> String {
+    THEM_SOURCE_SYSTEM.to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Core → engine
 
@@ -21,11 +27,29 @@ pub const PROTOCOL_VERSION: u32 = 1;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreMessage {
     /// First message after spawn.
-    Hello { v: u32, id: String },
+    Hello {
+        v: u32,
+        id: String,
+        /// Optional (additive, no protocol bump): the model variant the user has
+        /// selected, so `hello_ack.models_ready` answers for *that* variant
+        /// rather than the engine default. Omitted ⇒ engine default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        engine: Option<String>,
+    },
     /// Ensure the engine's ASR models are downloaded, compiled and loaded.
     /// Idempotent. Progress streams as `model_progress`; completion is the
     /// correlated `models_ready` response, failure an `error`.
-    PrepareModels { v: u32, id: String },
+    PrepareModels {
+        v: u32,
+        id: String,
+        /// Optional (additive, no protocol bump): which model variant to
+        /// prepare, e.g. "nemotron-streaming-ml". Omitted ⇒ engine default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        engine: Option<String>,
+        /// Optional language hint paired with `engine`, e.g. "auto" / "en".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+    },
     /// Input (mic) devices.
     ListDevices { v: u32, id: String },
     StartSession {
@@ -35,10 +59,14 @@ pub enum CoreMessage {
         /// An existing, writable session folder.
         dir: String,
         mic_device_uid: String,
-        /// Engine id, e.g. "parakeet-tdt-v3".
+        /// Engine id, e.g. "nemotron-streaming-ml".
         engine: String,
-        /// BCP-47-ish, e.g. "en".
+        /// BCP-47-ish, e.g. "auto" (multilingual) or "en".
         language: String,
+        /// "them" channel source: "system" (process tap, default) or an
+        /// input-device UID to capture directly. Omitted on the wire ⇒ "system".
+        #[serde(default = "them_source_system")]
+        them_source: String,
     },
     /// Stops the active session; completion is signalled by `session_stopped`.
     StopSession { v: u32, id: String },
@@ -53,6 +81,18 @@ impl CoreMessage {
         Self::Hello {
             v: PROTOCOL_VERSION,
             id: id.into(),
+            engine: None,
+        }
+    }
+
+    /// Like `hello`, but asks the engine to report `models_ready` for the
+    /// user's selected variant — otherwise a cached default can mask a
+    /// missing selected model and defer its download to the first recording.
+    pub fn hello_for(id: impl Into<String>, engine: impl Into<String>) -> Self {
+        Self::Hello {
+            v: PROTOCOL_VERSION,
+            id: id.into(),
+            engine: Some(engine.into()),
         }
     }
 
@@ -60,6 +100,23 @@ impl CoreMessage {
         Self::PrepareModels {
             v: PROTOCOL_VERSION,
             id: id.into(),
+            engine: None,
+            language: None,
+        }
+    }
+
+    /// Like `prepare_models`, but targets a specific model variant so the
+    /// launch-time download/compile matches the user's selected `asr_model`.
+    pub fn prepare_models_with(
+        id: impl Into<String>,
+        engine: impl Into<String>,
+        language: impl Into<String>,
+    ) -> Self {
+        Self::PrepareModels {
+            v: PROTOCOL_VERSION,
+            id: id.into(),
+            engine: Some(engine.into()),
+            language: Some(language.into()),
         }
     }
 
@@ -78,6 +135,7 @@ impl CoreMessage {
         mic_device_uid: impl Into<String>,
         engine: impl Into<String>,
         language: impl Into<String>,
+        them_source: impl Into<String>,
     ) -> Self {
         Self::StartSession {
             v: PROTOCOL_VERSION,
@@ -87,6 +145,7 @@ impl CoreMessage {
             mic_device_uid: mic_device_uid.into(),
             engine: engine.into(),
             language: language.into(),
+            them_source: them_source.into(),
         }
     }
 
@@ -134,7 +193,7 @@ pub enum EngineMessage {
         v: u32,
         id: String,
         protocol_version: u32,
-        /// e.g. {"parakeet-tdt-v3": "<semver/model rev>"}
+        /// e.g. {"nemotron-streaming-ml": "<semver/model rev>"}
         engine_versions: BTreeMap<String, String>,
         models_ready: bool,
     },
@@ -144,6 +203,10 @@ pub enum EngineMessage {
         v: u32,
         id: String,
         items: Vec<DeviceInfo>,
+        /// Optional (additive, no protocol bump): what the far end plays out of,
+        /// so the UI can suggest a headset before recording starts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<OutputDeviceInfo>,
     },
     SessionStarted {
         v: u32,
@@ -223,6 +286,17 @@ pub struct DeviceInfo {
     pub is_default: bool,
 }
 
+/// The device the far end plays out of. `route` is the engine's *advisory* read
+/// on whether that audio also reaches the mic acoustically — "speakers" (it
+/// does), "headphones" (it doesn't), or "unknown" (can't tell, say nothing).
+/// Never a gate for echo suppression, which decides from correlation instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OutputDeviceInfo {
+    pub name: String,
+    pub transport: String,
+    pub route: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
     /// Unique per session, monotonic across both channels.
@@ -249,7 +323,21 @@ pub struct AudioFileInfo {
     pub codec: String,
     pub container: String,
     pub duration_s: f64,
+    /// Sample rate OF THE FILE. The engine encodes the recording at 16 kHz (or
+    /// the capture rate, whichever is lower), so this is not necessarily what
+    /// the device delivered.
     pub sample_rate: u32,
+    /// Sample rate the DEVICE delivered. Additive field — an engine predating
+    /// it omits the key, so fall back to `sample_rate`.
+    #[serde(default)]
+    pub source_sample_rate: Option<u32>,
+}
+
+impl AudioFileInfo {
+    /// The capture device's rate, falling back to the file's for older engines.
+    pub fn device_sample_rate(&self) -> u32 {
+        self.source_sample_rate.unwrap_or(self.sample_rate)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -305,7 +393,7 @@ mod tests {
             text: "hello there".into(),
             confidence: 0.93,
             is_final: true,
-            engine: "parakeet-tdt-v3".into(),
+            engine: "nemotron-streaming-ml".into(),
         }
     }
 
@@ -316,7 +404,8 @@ mod tests {
             codec: "opus".into(),
             container: "caf".into(),
             duration_s: 2621.4,
-            sample_rate: 48_000,
+            sample_rate: 16_000,
+            source_sample_rate: Some(48_000),
         }
     }
 
@@ -324,14 +413,20 @@ mod tests {
     fn round_trip_every_core_message() {
         rt_core(CoreMessage::hello("01J1"));
         rt_core(CoreMessage::prepare_models("01J1B"));
+        rt_core(CoreMessage::prepare_models_with(
+            "01J1C",
+            "nemotron-streaming-en",
+            "en",
+        ));
         rt_core(CoreMessage::list_devices("01J2"));
         rt_core(CoreMessage::start_session(
             "01J3",
             "01J9XYZ",
             "/tmp/sessions/x",
             "BuiltInMicrophoneDevice",
-            "parakeet-tdt-v3",
+            "nemotron-streaming-ml",
             "en",
+            "system",
         ));
         rt_core(CoreMessage::stop_session("01J4"));
         rt_core(CoreMessage::ping("01J5"));
@@ -345,7 +440,7 @@ mod tests {
             id: "01J1".into(),
             protocol_version: 1,
             engine_versions: BTreeMap::from([(
-                "parakeet-tdt-v3".to_string(),
+                "nemotron-streaming-ml".to_string(),
                 "0.15.2".to_string(),
             )]),
             models_ready: true,
@@ -363,6 +458,17 @@ mod tests {
                 sample_rate: 48_000,
                 is_default: true,
             }],
+            output: None,
+        });
+        rt_engine(EngineMessage::Devices {
+            v: 1,
+            id: "01J2B".into(),
+            items: vec![],
+            output: Some(OutputDeviceInfo {
+                name: "MacBook Air Speakers".into(),
+                transport: "built-in".into(),
+                route: "speakers".into(),
+            }),
         });
         rt_engine(EngineMessage::SessionStarted {
             v: 1,
@@ -423,8 +529,9 @@ mod tests {
             "01J9XYZ",
             "/Users/u/Library/Application Support/Minutiae/sessions/2026-06-10T14-30-22Z--01J9XYZ",
             "BuiltInMicrophoneDevice",
-            "parakeet-tdt-v3",
+            "nemotron-streaming-ml",
             "en",
+            "system",
         );
         let expected: Value = serde_json::from_str(
             r#"{
@@ -434,8 +541,9 @@ mod tests {
                 "session_id": "01J9XYZ",
                 "dir": "/Users/u/Library/Application Support/Minutiae/sessions/2026-06-10T14-30-22Z--01J9XYZ",
                 "mic_device_uid": "BuiltInMicrophoneDevice",
-                "engine": "parakeet-tdt-v3",
-                "language": "en"
+                "engine": "nemotron-streaming-ml",
+                "language": "en",
+                "them_source": "system"
             }"#,
         )
         .unwrap();
@@ -443,6 +551,17 @@ mod tests {
         // and the exact hand-written wire line parses back to the same message
         let back: CoreMessage = serde_json::from_value(expected).unwrap();
         assert_eq!(back, msg);
+
+        // them_source omitted on the wire ⇒ defaults to "system"
+        let legacy: CoreMessage = serde_json::from_str(
+            r#"{"v":1,"type":"start_session","id":"i","session_id":"s","dir":"/tmp",
+                "mic_device_uid":"m","engine":"nemotron-streaming-ml","language":"en"}"#,
+        )
+        .unwrap();
+        match legacy {
+            CoreMessage::StartSession { them_source, .. } => assert_eq!(them_source, "system"),
+            other => panic!("expected start_session, got {other:?}"),
+        }
     }
 
     #[test]
@@ -459,7 +578,7 @@ mod tests {
                 "text": "hello there",
                 "confidence": 0.93,
                 "final": true,
-                "engine": "parakeet-tdt-v3"
+                "engine": "nemotron-streaming-ml"
             }
         }"#;
         let msg: EngineMessage = serde_json::from_str(wire).unwrap();
@@ -478,13 +597,43 @@ mod tests {
     }
 
     #[test]
+    fn wire_shape_devices_output() {
+        // Mirrors what the Swift engine emits; `output` is additive, so a
+        // `devices` without it must still decode (older engine, or an engine
+        // that couldn't read the output device).
+        let wire = r#"{
+            "v": 1,
+            "type": "devices",
+            "id": "01JDEV",
+            "items": [],
+            "output": {
+                "name": "MacBook Air Speakers",
+                "transport": "built-in",
+                "route": "speakers"
+            }
+        }"#;
+        let msg: EngineMessage = serde_json::from_str(wire).unwrap();
+        match msg {
+            EngineMessage::Devices { output: Some(o), .. } => {
+                assert_eq!(o.route, "speakers");
+                assert_eq!(o.name, "MacBook Air Speakers");
+            }
+            other => panic!("expected Devices with output, got {other:?}"),
+        }
+
+        let without = r#"{"v":1,"type":"devices","id":"01JDEV","items":[]}"#;
+        let msg: EngineMessage = serde_json::from_str(without).unwrap();
+        assert!(matches!(msg, EngineMessage::Devices { output: None, .. }));
+    }
+
+    #[test]
     fn wire_shape_hello_ack() {
         let wire = r#"{
             "v": 1,
             "type": "hello_ack",
             "id": "01JHELLO",
             "protocol_version": 1,
-            "engine_versions": {"parakeet-tdt-v3": "0.15.2"},
+            "engine_versions": {"nemotron-streaming-ml": "0.15.2"},
             "models_ready": false
         }"#;
         let msg: EngineMessage = serde_json::from_str(wire).unwrap();
@@ -495,7 +644,7 @@ mod tests {
                 id: "01JHELLO".into(),
                 protocol_version: 1,
                 engine_versions: BTreeMap::from([(
-                    "parakeet-tdt-v3".to_string(),
+                    "nemotron-streaming-ml".to_string(),
                     "0.15.2".to_string()
                 )]),
                 models_ready: false,
@@ -514,6 +663,15 @@ mod tests {
             serde_json::to_value(&req).unwrap(),
             serde_json::from_str::<Value>(r#"{"v":1,"type":"prepare_models","id":"01JPREP"}"#)
                 .unwrap()
+        );
+        // variant-bearing request carries engine/language (additive fields)
+        let req_model = CoreMessage::prepare_models_with("01JPREP2", "nemotron-streaming-en", "en");
+        assert_eq!(
+            serde_json::to_value(&req_model).unwrap(),
+            serde_json::from_str::<Value>(
+                r#"{"v":1,"type":"prepare_models","id":"01JPREP2","engine":"nemotron-streaming-en","language":"en"}"#
+            )
+            .unwrap()
         );
         let ack = EngineMessage::ModelsReady {
             v: 1,

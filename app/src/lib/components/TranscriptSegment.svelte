@@ -18,8 +18,8 @@
   .segment {
     display: flex;
     align-items: baseline;
-    gap: 8px;
-    padding: 3px 0;
+    gap: 9px;
+    padding: 5px 0;
   }
 
   .segment.nonfinal {
@@ -60,6 +60,10 @@
   }
 
   .text {
+    font-family: var(--font-serif);
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text);
     user-select: text;
     -webkit-user-select: text;
     cursor: text;

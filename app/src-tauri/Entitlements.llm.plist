@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened-runtime exceptions for the MLX/Metal LLM sidecar. These are the
+	     common set for on-device ML inference; trim after confirming the
+	     notarized sidecar runs (it has no embedded dylibs and loads a precompiled
+	     metallib as a resource, so library validation may not actually be needed). -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+</dict>
+</plist>

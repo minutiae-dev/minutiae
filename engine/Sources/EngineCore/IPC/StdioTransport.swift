@@ -5,8 +5,10 @@ import Foundation
 /// transcript events, levels and pongs originate on different threads/queues.
 public final class StdioTransport: @unchecked Sendable {
     private let writeLock = NSLock()
-    private let stdout = FileHandle.standardOutput
     private var readerThread: Thread?
+    /// Set once stdout is gone (EPIPE) so we stop trying — and stop logging —
+    /// for every subsequent event.
+    private var pipeClosed = false
 
     public init() {}
 
@@ -43,8 +45,14 @@ public final class StdioTransport: @unchecked Sendable {
         }
         writeLock.lock()
         defer { writeLock.unlock() }
+        guard !pipeClosed else { return }
         var out = data
         out.append(0x0A) // "\n"
-        stdout.write(out)
+        if !writeAll(out, to: STDOUT_FILENO) {
+            // The core is gone. Say so once, then go quiet: stdin EOF is already
+            // on its way and will drive the clean shutdown.
+            pipeClosed = true
+            log("stdout closed (errno \(errno)); stopping event writes")
+        }
     }
 }

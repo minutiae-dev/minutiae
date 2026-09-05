@@ -4,6 +4,9 @@
   "scripts": {
     "dev": "pnpm --filter minutiae tauri dev",
     "build": "pnpm --filter minutiae tauri build",
+    "dev:saas": "VITE_SAAS=1 pnpm --filter minutiae tauri dev --features saas",
+    "build:saas": "VITE_SAAS=1 pnpm --filter minutiae tauri build --features saas",
+    "release:saas": "bash scripts/release-saas.sh",
     "sidecar:build": "scripts/build-sidecar.sh",
     "sidecar:build:release": "scripts/build-sidecar.sh release",
     "test:engine": "swift test --package-path engine",

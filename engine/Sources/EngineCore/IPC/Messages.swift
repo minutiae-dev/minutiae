@@ -28,6 +28,27 @@ public struct DeviceInfo: Codable, Equatable, Sendable {
     }
 }
 
+/// Whether the far end is likely audible in the room (so the mic hears it too).
+/// Advisory only — echo suppression decides for itself from correlation.
+public enum OutputRoute: String, Codable, Sendable {
+    case speakers
+    case headphones
+    case unknown
+}
+
+/// The device the far end plays out of, for the pre-recording headset hint.
+public struct OutputDeviceInfo: Codable, Equatable, Sendable {
+    public var name: String
+    public var transport: String
+    public var route: OutputRoute
+
+    public init(name: String, transport: String, route: OutputRoute) {
+        self.name = name
+        self.transport = transport
+        self.route = route
+    }
+}
+
 public enum Channel: String, Codable, Sendable {
     case me
     case them
@@ -69,22 +90,31 @@ public struct AudioFileInfo: Codable, Equatable, Sendable {
     public var codec: String
     public var container: String
     public var durationS: Double
+    /// Sample rate OF THE FILE. The recording is encoded at
+    /// `AudioFileWriter.maxOpusSampleRate` or the capture rate, whichever is
+    /// lower — so this is not necessarily what the device delivered.
     public var sampleRate: Double
+    /// Sample rate the DEVICE delivered. Carried separately because the core
+    /// records it as the session's device metadata, where the file's encode
+    /// rate would be wrong.
+    public var sourceSampleRate: Double
 
     enum CodingKeys: String, CodingKey {
         case channel, path, codec, container
         case durationS = "duration_s"
         case sampleRate = "sample_rate"
+        case sourceSampleRate = "source_sample_rate"
     }
 
     public init(channel: Channel, path: String, codec: String, container: String,
-                durationS: Double, sampleRate: Double) {
+                durationS: Double, sampleRate: Double, sourceSampleRate: Double? = nil) {
         self.channel = channel
         self.path = path
         self.codec = codec
         self.container = container
         self.durationS = durationS
         self.sampleRate = sampleRate
+        self.sourceSampleRate = sourceSampleRate ?? sampleRate
     }
 }
 
@@ -123,11 +153,17 @@ public enum ModelProgressStage: String, Codable, Sendable {
 // MARK: - Core → engine
 
 public enum CoreMessage: Equatable, Sendable {
-    case hello(id: String)
-    case prepareModels(id: String)
+    /// `engine` is optional (additive, no protocol bump): the variant the user
+    /// has selected, so `models_ready` in the ack answers for that one rather
+    /// than the engine default. Omitted ⇒ default.
+    case hello(id: String, engine: String?)
+    /// `engine`/`language` are optional (additive, no protocol bump): they tell
+    /// the engine which model variant to download/prepare. Omitted ⇒ default.
+    case prepareModels(id: String, engine: String?, language: String?)
     case listDevices(id: String)
     case startSession(id: String, sessionId: String, dir: String,
-                      micDeviceUid: String, engine: String, language: String)
+                      micDeviceUid: String, engine: String, language: String,
+                      themSource: String)
     case stopSession(id: String)
     case ping(id: String)
     case shutdown
@@ -142,6 +178,7 @@ extension CoreMessage: Decodable {
         case dir
         case micDeviceUid = "mic_device_uid"
         case engine, language
+        case themSource = "them_source"
     }
 
     public init(from decoder: Decoder) throws {
@@ -149,9 +186,13 @@ extension CoreMessage: Decodable {
         let type = try c.decode(String.self, forKey: .type)
         switch type {
         case "hello":
-            self = .hello(id: try c.decode(String.self, forKey: .id))
+            self = .hello(id: try c.decode(String.self, forKey: .id),
+                          engine: try c.decodeIfPresent(String.self, forKey: .engine))
         case "prepare_models":
-            self = .prepareModels(id: try c.decode(String.self, forKey: .id))
+            self = .prepareModels(
+                id: try c.decode(String.self, forKey: .id),
+                engine: try c.decodeIfPresent(String.self, forKey: .engine),
+                language: try c.decodeIfPresent(String.self, forKey: .language))
         case "list_devices":
             self = .listDevices(id: try c.decode(String.self, forKey: .id))
         case "start_session":
@@ -161,7 +202,9 @@ extension CoreMessage: Decodable {
                 dir: try c.decode(String.self, forKey: .dir),
                 micDeviceUid: try c.decode(String.self, forKey: .micDeviceUid),
                 engine: try c.decode(String.self, forKey: .engine),
-                language: try c.decode(String.self, forKey: .language))
+                language: try c.decode(String.self, forKey: .language),
+                // Optional for forward-compat; omitted ⇒ system process tap.
+                themSource: try c.decodeIfPresent(String.self, forKey: .themSource) ?? "system")
         case "stop_session":
             self = .stopSession(id: try c.decode(String.self, forKey: .id))
         case "ping":
@@ -180,16 +223,19 @@ extension CoreMessage: Encodable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(1, forKey: .v)
         switch self {
-        case .hello(let id):
+        case .hello(let id, let engine):
             try c.encode("hello", forKey: .type)
             try c.encode(id, forKey: .id)
-        case .prepareModels(let id):
+            try c.encodeIfPresent(engine, forKey: .engine)
+        case .prepareModels(let id, let engine, let language):
             try c.encode("prepare_models", forKey: .type)
             try c.encode(id, forKey: .id)
+            try c.encodeIfPresent(engine, forKey: .engine)
+            try c.encodeIfPresent(language, forKey: .language)
         case .listDevices(let id):
             try c.encode("list_devices", forKey: .type)
             try c.encode(id, forKey: .id)
-        case .startSession(let id, let sessionId, let dir, let micDeviceUid, let engine, let language):
+        case .startSession(let id, let sessionId, let dir, let micDeviceUid, let engine, let language, let themSource):
             try c.encode("start_session", forKey: .type)
             try c.encode(id, forKey: .id)
             try c.encode(sessionId, forKey: .sessionId)
@@ -197,6 +243,7 @@ extension CoreMessage: Encodable {
             try c.encode(micDeviceUid, forKey: .micDeviceUid)
             try c.encode(engine, forKey: .engine)
             try c.encode(language, forKey: .language)
+            try c.encode(themSource, forKey: .themSource)
         case .stopSession(let id):
             try c.encode("stop_session", forKey: .type)
             try c.encode(id, forKey: .id)
@@ -216,7 +263,9 @@ extension CoreMessage: Encodable {
 public enum EngineMessage: Equatable, Sendable {
     case helloAck(id: String, protocolVersion: Int, engineVersions: [String: String], modelsReady: Bool)
     case modelsReady(id: String)
-    case devices(id: String, items: [DeviceInfo])
+    /// `output` is optional (additive, no protocol bump): what the far end plays
+    /// out of, so the UI can suggest a headset before recording.
+    case devices(id: String, items: [DeviceInfo], output: OutputDeviceInfo?)
     case sessionStarted(id: String, sessionId: String, t0EpochMs: Int64)
     case modelProgress(pct: Double, stage: ModelProgressStage)
     case transcript(sessionId: String, segment: Segment)
@@ -232,7 +281,7 @@ extension EngineMessage: Encodable {
         case protocolVersion = "protocol_version"
         case engineVersions = "engine_versions"
         case modelsReady = "models_ready"
-        case items
+        case items, output
         case sessionId = "session_id"
         case t0EpochMs = "t0_epoch_ms"
         case pct, stage, segment
@@ -254,10 +303,11 @@ extension EngineMessage: Encodable {
         case .modelsReady(let id):
             try c.encode("models_ready", forKey: .type)
             try c.encode(id, forKey: .id)
-        case .devices(let id, let items):
+        case .devices(let id, let items, let output):
             try c.encode("devices", forKey: .type)
             try c.encode(id, forKey: .id)
             try c.encode(items, forKey: .items)
+            try c.encodeIfPresent(output, forKey: .output)
         case .sessionStarted(let id, let sessionId, let t0EpochMs):
             try c.encode("session_started", forKey: .type)
             try c.encode(id, forKey: .id)
@@ -312,7 +362,8 @@ extension EngineMessage: Decodable {
         case "devices":
             self = .devices(
                 id: try c.decode(String.self, forKey: .id),
-                items: try c.decode([DeviceInfo].self, forKey: .items))
+                items: try c.decode([DeviceInfo].self, forKey: .items),
+                output: try c.decodeIfPresent(OutputDeviceInfo.self, forKey: .output))
         case "session_started":
             self = .sessionStarted(
                 id: try c.decode(String.self, forKey: .id),

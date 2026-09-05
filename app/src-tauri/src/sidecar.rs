@@ -23,12 +23,44 @@ use tauri_plugin_shell::ShellExt;
 use tokio::sync::oneshot;
 
 use crate::events;
-use crate::protocol::{CoreMessage, DeviceInfo, EngineMessage, ErrorCode};
+use crate::protocol::{CoreMessage, DeviceInfo, EngineMessage, ErrorCode, OutputDeviceInfo};
 use crate::session::{MicInfo, Phase, SessionMachine};
 
+/// Input devices plus what the far end is playing out of. The output route ships
+/// alongside the mic list because it changes for the same reasons (the user
+/// plugged something in) and the picker already refreshes on those events.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeviceList {
+    pub items: Vec<DeviceInfo>,
+    pub output: Option<OutputDeviceInfo>,
+}
+
 pub const SIDECAR_NAME: &str = "minutiae-engine";
+/// Default engine/language when no `asr_model` is set: batch Parakeet TDT v3
+/// (multilingual, auto-detects language, natively punctuated).
 pub const DEFAULT_ENGINE: &str = "parakeet-tdt-v3";
-pub const DEFAULT_LANGUAGE: &str = "en";
+pub const DEFAULT_LANGUAGE: &str = "auto";
+
+/// Resolve the persisted `asr_model` id into the wire `(engine, language)` pair.
+/// Parakeet and multilingual Nemotron auto-detect; the English Nemotron variant
+/// is pinned to "en". Unknown ids fall back to the default model.
+fn resolve_asr_model(model: &str) -> (&'static str, &'static str) {
+    match model {
+        "nemotron-streaming-en" => ("nemotron-streaming-en", "en"),
+        "nemotron-streaming-ml" => ("nemotron-streaming-ml", "auto"),
+        _ => (DEFAULT_ENGINE, DEFAULT_LANGUAGE),
+    }
+}
+
+/// The user's selected `(engine, language)`, read from persisted settings.
+fn selected_asr_model(shared: &Shared) -> (&'static str, &'static str) {
+    let model = shared
+        .app
+        .state::<crate::settings::SettingsState>()
+        .get()
+        .asr_model;
+    resolve_asr_model(&model)
+}
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_MISSED_PONGS: u32 = 2;
@@ -88,6 +120,10 @@ struct Shared {
     engine: Mutex<EngineLink>,
     session: Mutex<SessionMachine>,
     devices: Mutex<Vec<DeviceInfo>>,
+    /// Folder of the session currently in focus (the active recording, or the
+    /// most-recently finished one until the next start). Targets the scratchpad
+    /// and, in M2, the enhancement step. Cleared only when a start fails.
+    current_session_dir: Mutex<Option<PathBuf>>,
 }
 
 /// Managed by tauri state; cheap to clone handles out of.
@@ -103,6 +139,7 @@ impl SidecarManager {
                 engine: Mutex::new(EngineLink::default()),
                 session: Mutex::new(SessionMachine::new(env!("CARGO_PKG_VERSION"))),
                 devices: Mutex::new(Vec::new()),
+                current_session_dir: Mutex::new(None),
             }),
         }
     }
@@ -115,12 +152,14 @@ impl SidecarManager {
 
     // -- Command surface ----------------------------------------------------
 
-    pub async fn list_devices(&self) -> Result<Vec<DeviceInfo>, SidecarError> {
+    // (see `DeviceList` below for the list_devices return shape)
+
+    pub async fn list_devices(&self) -> Result<DeviceList, SidecarError> {
         let msg = CoreMessage::list_devices(new_id());
         match request(&self.shared, msg, REQUEST_TIMEOUT, false).await? {
-            EngineMessage::Devices { items, .. } => {
+            EngineMessage::Devices { items, output, .. } => {
                 *self.shared.devices.lock().unwrap() = items.clone();
-                Ok(items)
+                Ok(DeviceList { items, output })
             }
             EngineMessage::Error { code, message, .. } => {
                 Err(SidecarError::Engine { code, message })
@@ -132,15 +171,20 @@ impl SidecarManager {
     pub async fn start_session(
         &self,
         mic_uid: String,
+        them_source: String,
     ) -> Result<events::SessionStatePayload, SidecarError> {
         let shared = &self.shared;
         let mic = self.resolve_mic(&mic_uid).await;
         let sessions_root = sessions_root(&shared.app)?;
 
+        let (engine, language) = selected_asr_model(shared);
         let start = {
             let mut session = shared.session.lock().unwrap();
-            session.begin_starting(&sessions_root, mic, DEFAULT_ENGINE, DEFAULT_LANGUAGE)?
+            session.begin_starting(&sessions_root, mic, engine, language)?
         };
+        // Focus this session for scratchpad notes (and M2 enhancement). A new
+        // start replaces it; a failed start clears it in `fail_active`.
+        *shared.current_session_dir.lock().unwrap() = Some(start.dir.clone());
         emit_session_state(shared);
         tracing::info!(session_id = %start.session_id, dir = %start.dir.display(), "starting session");
 
@@ -149,8 +193,9 @@ impl SidecarManager {
             start.session_id.clone(),
             start.dir.to_string_lossy(),
             mic_uid,
-            DEFAULT_ENGINE,
-            DEFAULT_LANGUAGE,
+            engine,
+            language,
+            them_source,
         );
         let result = request(shared, msg, START_TIMEOUT, true).await;
         match result {
@@ -274,8 +319,8 @@ impl SidecarManager {
         if let Some(found) = find(&self.shared.devices.lock().unwrap()) {
             return found;
         }
-        if let Ok(items) = self.list_devices().await {
-            if let Some(found) = find(&items) {
+        if let Ok(list) = self.list_devices().await {
+            if let Some(found) = find(&list.items) {
                 return found;
             }
         }
@@ -292,9 +337,66 @@ impl SidecarManager {
             let mut session = self.shared.session.lock().unwrap();
             session.abort();
         }
+        // The folder is gone, so unfocus it for the scratchpad.
+        *self.shared.current_session_dir.lock().unwrap() = None;
         // best effort: only removes the folder if nothing was written into it
         let _ = std::fs::remove_dir(dir);
         emit_session_state(&self.shared);
+    }
+
+    // -- Scratchpad ---------------------------------------------------------
+
+    /// Persist the focused session's notes to `scratchpad.md` (atomic). No-op
+    /// error if no session is in focus yet.
+    pub fn save_scratchpad(&self, text: &str) -> Result<(), SidecarError> {
+        let dir = self
+            .shared
+            .current_session_dir
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| SidecarError::Other("no session to attach notes to".into()))?;
+        crate::settings::write_atomic(&dir.join("scratchpad.md"), text.as_bytes())
+            .map_err(|e| SidecarError::Other(format!("could not save notes: {e}")))
+    }
+
+    /// Folder of the session currently in focus (the active recording or the
+    /// most-recently finished one), for the M2 enhancement step. None until the
+    /// first session of the run starts.
+    pub fn focused_session_dir(&self) -> Option<PathBuf> {
+        self.shared.current_session_dir.lock().unwrap().clone()
+    }
+
+    /// Root folder that holds every session, for the Recents list.
+    pub fn sessions_root(&self) -> Result<PathBuf, SidecarError> {
+        sessions_root(&self.shared.app)
+    }
+
+    /// Focus a *past* session (clicked in Recents) so its notes can be edited
+    /// and re-enhanced. Refused while a recording is in flight — switching the
+    /// focused folder mid-capture would misroute the live scratchpad.
+    pub fn focus_session(&self, dir: PathBuf) -> Result<(), SidecarError> {
+        let phase = self.shared.session.lock().unwrap().phase();
+        if !matches!(phase, Phase::Idle | Phase::Error) {
+            return Err(SidecarError::Other(
+                "stop the current recording before opening another session".into(),
+            ));
+        }
+        if !dir.join("session.json").is_file() {
+            return Err(SidecarError::Other("that session no longer exists".into()));
+        }
+        *self.shared.current_session_dir.lock().unwrap() = Some(dir);
+        Ok(())
+    }
+
+    /// Read the focused session's `scratchpad.md`; empty string if none exists
+    /// or no session is in focus.
+    pub fn load_scratchpad(&self) -> String {
+        let dir = self.shared.current_session_dir.lock().unwrap().clone();
+        match dir {
+            Some(d) => std::fs::read_to_string(d.join("scratchpad.md")).unwrap_or_default(),
+            None => String::new(),
+        }
     }
 
     /// Abort a session that failed mid/stop; keeps whatever is on disk.
@@ -406,7 +508,9 @@ async fn ensure_models_ready(shared: Arc<Shared>) {
     }
     tracing::info!("preparing ASR models (download/compile if needed)");
 
-    let msg = CoreMessage::prepare_models(new_id());
+    // Target the user's selected model so the launch-time download matches it.
+    let (engine, language) = selected_asr_model(&shared);
+    let msg = CoreMessage::prepare_models_with(new_id(), engine, language);
     let result = request(&shared, msg, PREPARE_TIMEOUT, true).await;
 
     shared.engine.lock().unwrap().preparing = false;
@@ -489,7 +593,10 @@ async fn run_engine(shared: &Arc<Shared>, handshake_ok: &mut bool) -> Result<(),
 
     // hello/hello_ack handshake, answered inside the event loop below
     let hello_id = new_id();
-    send_line(shared, &CoreMessage::hello(hello_id.clone()))
+    // Name the selected variant so `models_ready` describes the model we will
+    // actually prepare, not whichever one happens to be the engine default.
+    let (hello_engine, _) = selected_asr_model(shared);
+    send_line(shared, &CoreMessage::hello_for(hello_id.clone(), hello_engine))
         .map_err(|e| format!("hello: {e}"))?;
 
     let mut hello_done = false;
@@ -751,13 +858,20 @@ fn on_engine_down(shared: &Arc<Shared>) {
         had_session.then_some(aborted)
     };
     if let Some(aborted) = aborted {
-        let detail = aborted
-            .map(|a| format!(" Partial transcript saved in {}.", a.dir.display()))
-            .unwrap_or_default();
+        // Turn the just-aborted partial into a first-class, openable session so
+        // the user can still read/enhance what was captured (abort already
+        // flushed its transcript.json; this backfills the session.json that a
+        // clean stop would have written).
+        let detail = if let Some(a) = aborted {
+            crate::history::recover_session_dir(&a.dir);
+            " Your partial recording was saved to your meetings.".to_string()
+        } else {
+            String::new()
+        };
         emit_app_error(
             shared,
             ErrorCode::Internal,
-            format!("The transcription engine stopped; the session was aborted.{detail}"),
+            format!("The transcription engine stopped; the recording was ended.{detail}"),
             false,
         );
         emit_session_state(shared);
@@ -768,5 +882,35 @@ fn on_engine_down(shared: &Arc<Shared>) {
             "The transcription engine stopped and is restarting.".to_string(),
             false,
         );
+    }
+}
+
+#[cfg(test)]
+mod asr_model_tests {
+    use super::*;
+
+    /// The wire engine id is a compatibility surface: it is persisted as
+    /// `asr_model`, sent on `start_session`, and written into session.json.
+    #[test]
+    fn default_model_is_parakeet() {
+        assert_eq!(DEFAULT_ENGINE, "parakeet-tdt-v3");
+        assert_eq!(DEFAULT_ENGINE, crate::settings::DEFAULT_ASR_MODEL);
+        assert_eq!(resolve_asr_model(DEFAULT_ENGINE), ("parakeet-tdt-v3", "auto"));
+    }
+
+    /// Parakeet and multilingual Nemotron auto-detect; the English variant is
+    /// pinned. An id this build does not know falls back to the default rather
+    /// than being forwarded to an engine that would reject it.
+    #[test]
+    fn resolves_each_known_model() {
+        assert_eq!(
+            resolve_asr_model("nemotron-streaming-ml"),
+            ("nemotron-streaming-ml", "auto")
+        );
+        assert_eq!(
+            resolve_asr_model("nemotron-streaming-en"),
+            ("nemotron-streaming-en", "en")
+        );
+        assert_eq!(resolve_asr_model("who-knows"), (DEFAULT_ENGINE, DEFAULT_LANGUAGE));
     }
 }

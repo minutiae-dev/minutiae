@@ -27,12 +27,19 @@ final class MessagesTests: XCTestCase {
     // MARK: Round-trips — every message type
 
     func testCoreMessageRoundTrips() throws {
-        try roundTrip(CoreMessage.hello(id: "1"))
-        try roundTrip(CoreMessage.prepareModels(id: "1b"))
+        try roundTrip(CoreMessage.hello(id: "1", engine: nil))
+        try roundTrip(CoreMessage.hello(id: "1b", engine: "nemotron-streaming-en"))
+        try roundTrip(CoreMessage.prepareModels(id: "1b", engine: nil, language: nil))
+        try roundTrip(CoreMessage.prepareModels(id: "1c", engine: "nemotron-streaming-ml", language: "auto"))
         try roundTrip(CoreMessage.listDevices(id: "2"))
         try roundTrip(CoreMessage.startSession(
             id: "3", sessionId: "01J9XYZ", dir: "/tmp/sessions/x",
-            micDeviceUid: "BuiltInMicrophoneDevice", engine: "parakeet-tdt-v3", language: "en"))
+            micDeviceUid: "BuiltInMicrophoneDevice", engine: "nemotron-streaming-ml", language: "auto",
+            themSource: "system"))
+        try roundTrip(CoreMessage.startSession(
+            id: "3b", sessionId: "01J9XYZ", dir: "/tmp/sessions/x",
+            micDeviceUid: "BuiltInMicrophoneDevice", engine: "nemotron-streaming-en", language: "en",
+            themSource: "BlackHole2ch_UID"))
         try roundTrip(CoreMessage.stopSession(id: "4"))
         try roundTrip(CoreMessage.ping(id: "5"))
         try roundTrip(CoreMessage.shutdown)
@@ -41,19 +48,23 @@ final class MessagesTests: XCTestCase {
     func testEngineMessageRoundTrips() throws {
         try roundTrip(EngineMessage.helloAck(
             id: "1", protocolVersion: 1,
-            engineVersions: ["parakeet-tdt-v3": "0.15.2"], modelsReady: true))
+            engineVersions: ["nemotron-streaming-ml": "0.15.2"], modelsReady: true))
         try roundTrip(EngineMessage.modelsReady(id: "1b"))
         try roundTrip(EngineMessage.devices(id: "2", items: [
             DeviceInfo(uid: "uid-1", name: "MacBook Pro Microphone", sampleRate: 48000, isDefault: true),
             DeviceInfo(uid: "uid-2", name: "AirPods Pro", sampleRate: 24000, isDefault: false),
-        ]))
+        ], output: nil))
+        try roundTrip(EngineMessage.devices(id: "2b", items: [], output: OutputDeviceInfo(
+            name: "MacBook Air Speakers", transport: "built-in", route: .speakers)))
+        try roundTrip(EngineMessage.devices(id: "2c", items: [], output: OutputDeviceInfo(
+            name: "AirPods Pro", transport: "bluetooth", route: .headphones)))
         try roundTrip(EngineMessage.sessionStarted(id: "3", sessionId: "01J9XYZ", t0EpochMs: 1765432100123))
         try roundTrip(EngineMessage.modelProgress(pct: 42.5, stage: .downloading))
         try roundTrip(EngineMessage.modelProgress(pct: 99.5, stage: .compiling))
         try roundTrip(EngineMessage.transcript(
             sessionId: "01J9XYZ",
             segment: Segment(idx: 42, channel: .them, t0: 12.5, t1: 17.25, text: "hello",
-                             confidence: 0.5, isFinal: true, engine: "parakeet-tdt-v3")))
+                             confidence: 0.5, isFinal: true, engine: "nemotron-streaming-ml")))
         try roundTrip(EngineMessage.levels(sessionId: "01J9XYZ", meDb: -42.5, themDb: -120))
         try roundTrip(EngineMessage.sessionStopped(
             id: "4", sessionId: "01J9XYZ",
@@ -71,38 +82,45 @@ final class MessagesTests: XCTestCase {
         let msg = EngineMessage.transcript(
             sessionId: "01J9XYZ",
             segment: Segment(idx: 42, channel: .me, t0: 12.5, t1: 17.25, text: "hello world",
-                             confidence: 0.5, isFinal: true, engine: "parakeet-tdt-v3"))
+                             confidence: 0.5, isFinal: true, engine: "nemotron-streaming-ml"))
         XCTAssertEqual(
             try encodeString(msg),
-            #"{"segment":{"channel":"me","confidence":0.5,"engine":"parakeet-tdt-v3","final":true,"idx":42,"t0":12.5,"t1":17.25,"text":"hello world"},"session_id":"01J9XYZ","type":"transcript","v":1}"#
+            #"{"segment":{"channel":"me","confidence":0.5,"engine":"nemotron-streaming-ml","final":true,"idx":42,"t0":12.5,"t1":17.25,"text":"hello world"},"session_id":"01J9XYZ","type":"transcript","v":1}"#
         )
     }
 
     func testHelloAckExactWire() throws {
         let msg = EngineMessage.helloAck(
             id: "1", protocolVersion: 1,
-            engineVersions: ["parakeet-tdt-v3": "0.15.2"], modelsReady: true)
+            engineVersions: ["nemotron-streaming-ml": "0.15.2"], modelsReady: true)
         XCTAssertEqual(
             try encodeString(msg),
-            #"{"engine_versions":{"parakeet-tdt-v3":"0.15.2"},"id":"1","models_ready":true,"protocol_version":1,"type":"hello_ack","v":1}"#
+            #"{"engine_versions":{"nemotron-streaming-ml":"0.15.2"},"id":"1","models_ready":true,"protocol_version":1,"type":"hello_ack","v":1}"#
         )
     }
 
     func testPrepareModelsAndModelsReadyWire() throws {
-        // request decodes from the doc's wire shape
+        // request decodes from the doc's wire shape; engine/language are
+        // optional (additive) — absent ⇒ nil, the default-model path.
         let req = try Wire.decodeCore(Data(#"{"v":1,"type":"prepare_models","id":"p1"}"#.utf8))
-        XCTAssertEqual(req, .prepareModels(id: "p1"))
+        XCTAssertEqual(req, .prepareModels(id: "p1", engine: nil, language: nil))
+        // …and decodes the variant-bearing shape the core now sends.
+        let reqWithModel = try Wire.decodeCore(Data(
+            #"{"v":1,"type":"prepare_models","id":"p2","engine":"nemotron-streaming-en","language":"en"}"#.utf8))
+        XCTAssertEqual(reqWithModel, .prepareModels(id: "p2", engine: "nemotron-streaming-en", language: "en"))
         // response encodes to the doc's wire shape
         XCTAssertEqual(try encodeString(.modelsReady(id: "p1")),
                        #"{"id":"p1","type":"models_ready","v":1}"#)
     }
 
     func testStartSessionExactWireDecode() throws {
-        let json = #"{"v":1,"type":"start_session","id":"7","session_id":"01J9XYZ","dir":"/tmp/sessions/x","mic_device_uid":"BuiltInMicrophoneDevice","engine":"parakeet-tdt-v3","language":"en"}"#
+        let json = #"{"v":1,"type":"start_session","id":"7","session_id":"01J9XYZ","dir":"/tmp/sessions/x","mic_device_uid":"BuiltInMicrophoneDevice","engine":"nemotron-streaming-ml","language":"auto"}"#
         let msg = try Wire.decodeCore(Data(json.utf8))
+        // them_source omitted ⇒ defaults to "system".
         XCTAssertEqual(msg, .startSession(
             id: "7", sessionId: "01J9XYZ", dir: "/tmp/sessions/x",
-            micDeviceUid: "BuiltInMicrophoneDevice", engine: "parakeet-tdt-v3", language: "en"))
+            micDeviceUid: "BuiltInMicrophoneDevice", engine: "nemotron-streaming-ml", language: "auto",
+            themSource: "system"))
     }
 
     // MARK: Forward compatibility

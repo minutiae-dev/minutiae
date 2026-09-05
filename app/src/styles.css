@@ -1,21 +1,31 @@
 :root {
-  --bg: #16181d;
-  --bg-raised: #1e2128;
-  --bg-inset: #111317;
-  --border: #2c303a;
-  --text: #e6e8ee;
-  --text-dim: #9aa0ad;
-  --accent: #4f8cff;
-  --me: #4f8cff;
-  --them: #2fbf8f;
-  --danger: #e5534b;
+  /* Warm near-black, matched to Claude Desktop's dark theme. */
+  --bg: #1f1e1d;
+  --bg-raised: #2a2826;
+  --bg-inset: #1a1917;
+  --sidebar: #181715;
+  --border: #38352f;
+  --border-soft: #2c2a26;
+  --text: #f0ede4;
+  --text-dim: #a3a094;
+  --text-faint: #75726a;
+  /* Periwinkle-indigo accent — cool against the warm-dark ground. */
+  --accent: #7c7fe0;
+  --accent-soft: #6a6cce;
+  --me: #7c7fe0;
+  --them: #6ba4a0;
+  --danger: #d9645b;
   --warn: #d4a72c;
 
-  font-family:
+  /* New York (ui-serif on macOS) for display; SF for everything else. */
+  --font-serif: ui-serif, "New York", Georgia, "Times New Roman", serif;
+  --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
     Helvetica, Arial, sans-serif;
+
+  font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--text);
   background-color: var(--bg);
 
@@ -47,13 +57,21 @@ button {
   color: inherit;
   border: 1px solid var(--border);
   background: var(--bg-raised);
-  border-radius: 6px;
-  padding: 5px 14px;
+  border-radius: 8px;
+  padding: 6px 14px;
   cursor: default;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--text-faint);
+  background: color-mix(in srgb, var(--bg-raised) 80%, var(--text) 4%);
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
 }
 
 select {
@@ -61,6 +79,10 @@ select {
   color: inherit;
   background: var(--bg-raised);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 8px;
+  border-radius: 8px;
+  padding: 5px 9px;
+}
+
+select:hover:not(:disabled) {
+  border-color: var(--text-faint);
 }

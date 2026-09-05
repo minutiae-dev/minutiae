@@ -17,16 +17,32 @@
         "width": 1000,
         "height": 700,
         "minWidth": 720,
-        "minHeight": 480
+        "minHeight": 480,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["minutiae"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "externalBin": ["binaries/minutiae-engine"],
     "macOS": {
       "minimumSystemVersion": "14.4",

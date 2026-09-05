@@ -9,12 +9,20 @@ rust-version = "1.77"
 name = "minutiae_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Proprietary cloud tier (sync + cloud enrichment). OFF in the OSS build.
+# Pulls in the network/keychain deps and compiles the gitignored `src/saas/`
+# module; with the feature off, `mod saas;` is never referenced so the absent
+# directory never breaks the build.
+saas = ["dep:reqwest", "dep:keyring", "dep:url", "dep:tiny_http", "dep:base64", "dep:sha2", "dep:rand", "dep:tauri-plugin-deep-link"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -26,5 +34,25 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # oneshot/select/time used by the sidecar supervisor (same runtime).
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 
+# --- SaaS-only (optional; enabled by the `saas` feature) ---
+# HTTPS client for the cloud API; rustls to avoid an OpenSSL build dep.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+# Refresh token storage in the macOS Keychain (never in settings.json).
+keyring = { version = "3", optional = true }
+# Custom-scheme deep link (minutiae://oauth/callback) for the prod OAuth flow.
+tauri-plugin-deep-link = { version = "2", optional = true }
+# OAuth URL building + the PKCE loopback listener + challenge.
+url = { version = "2", optional = true }
+tiny_http = { version = "0.12", optional = true }
+base64 = { version = "0.22", optional = true }
+sha2 = { version = "0.10", optional = true }
+rand = { version = "0.8", optional = true }
+
 [dev-dependencies]
 tempfile = "3"
+# Mock HTTP server for the cloud-sync tests (`--features saas`): the sync loop's
+# interesting behavior is all in how it reacts to server responses — a partial
+# page, a 401, a truncated body — none of which is reachable without one.
+wiremock = "0.6"
+# `#[tokio::test]` for those async tests; the runtime tauri uses is the same one.
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }

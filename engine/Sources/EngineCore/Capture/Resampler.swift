@@ -8,6 +8,11 @@ public final class Resampler {
     private let converter: AVAudioConverter
     private let outputFormat: AVAudioFormat
     public let inputFormat: AVAudioFormat
+    /// Reused output buffer, grown on demand. Allocating (and freeing) an
+    /// AVAudioPCMBuffer per capture callback was ~20% of this function's cost.
+    /// NOT thread-safe — same as the underlying AVAudioConverter, which already
+    /// requires each instance to be driven from one place at a time.
+    private var output: AVAudioPCMBuffer?
 
     public init?(inputFormat: AVAudioFormat) {
         guard let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
@@ -26,9 +31,12 @@ public final class Resampler {
     public func convert(_ buffer: AVAudioPCMBuffer) -> [Float] {
         let ratio = Self.asrSampleRate / inputFormat.sampleRate
         let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up) + 32)
-        guard capacity > 0,
-              let out = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity)
-        else { return [] }
+        guard capacity > 0 else { return [] }
+        if output == nil || output!.frameCapacity < capacity {
+            output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity)
+        }
+        guard let out = output else { return [] }
+        out.frameLength = 0
 
         var fed = false
         var convError: NSError?

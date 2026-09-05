@@ -28,7 +28,7 @@
       {#if session.isRecording}
         Listening… transcript will appear here.
       {:else}
-        Pick a mic and press Start to capture a meeting.
+        Press Record to start. Pick your mic from the ⚙ in the top bar.
       {/if}
     </div>
   {:else}
@@ -42,10 +42,10 @@
   .pane {
     flex: 1;
     min-height: 0;
+    min-width: 0;
     overflow-y: auto;
-    padding: 10px 14px;
-    background: var(--bg-inset);
-    border-top: 1px solid var(--border);
+    padding: 2px 22px 22px;
+    background: var(--bg);
   }
 
   .empty {

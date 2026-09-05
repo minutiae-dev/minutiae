@@ -1,104 +1,119 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { session } from "./lib/stores/session.svelte";
-  import DevicePicker from "./lib/components/DevicePicker.svelte";
+  import Sidebar from "./lib/components/Sidebar.svelte";
   import CaptureControls from "./lib/components/CaptureControls.svelte";
   import LevelMeter from "./lib/components/LevelMeter.svelte";
-  import TranscriptPane from "./lib/components/TranscriptPane.svelte";
+  import Scratchpad from "./lib/components/Scratchpad.svelte";
+  import MeetingTabs from "./lib/components/MeetingTabs.svelte";
+  import SourcesGear from "./lib/components/SourcesGear.svelte";
+  import SaasMount from "./lib/SaasMount.svelte";
 
   onMount(() => {
     session.init();
     return () => session.destroy();
   });
+
+  const showLevels = $derived(
+    session.phase === "recording" || session.phase === "stopping",
+  );
 </script>
 
-<main>
-  <header>
-    <h1>Minutiae</h1>
-    <span class="state-badge {session.phase}">{session.phase}</span>
-  </header>
+<main class="app">
+  <Sidebar />
 
-  <section class="controls-row">
-    <DevicePicker />
-    <div class="spacer"></div>
-    <CaptureControls />
+  <section class="content">
+    <header class="topbar" data-tauri-drag-region>
+      <CaptureControls />
+      <div class="topbar-right">
+        {#if showLevels}
+          <div class="levels">
+            <LevelMeter
+              compact
+              channel="me"
+              label="Me"
+              db={session.levels.meDb}
+            />
+            <LevelMeter
+              compact
+              channel="them"
+              label="Them"
+              db={session.levels.themDb}
+            />
+          </div>
+        {/if}
+        <SourcesGear />
+      </div>
+    </header>
+
+    <div class="workspace">
+      <section class="pane notes">
+        <Scratchpad />
+      </section>
+      <section class="pane tabs">
+        <MeetingTabs />
+      </section>
+    </div>
   </section>
 
-  <section class="meters">
-    <LevelMeter label="Me" db={session.levels.meDb} />
-    <LevelMeter label="Them" db={session.levels.themDb} />
-  </section>
-
-  <TranscriptPane />
+  <!-- Optional skippable startup sign-in (gitignored; SaaS builds only). -->
+  <SaasMount name="SignInOverlay" />
 </main>
 
 <style>
-  main {
+  .app {
     height: 100vh;
+    display: flex;
+    background: var(--bg);
+  }
+
+  .content {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
   }
 
-  header {
+  /* Control bar — the one focal surface, sits in the title-bar region. */
+  .topbar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 12px 14px 8px;
-    user-select: none;
-    -webkit-user-select: none;
+    gap: 20px;
+    /* Top pad clears the overlay title bar; the sidebar holds the traffic lights. */
+    padding: 14px 22px 14px;
+    min-height: 60px;
   }
 
-  h1 {
-    font-size: 16px;
-    font-weight: 700;
-    margin: 0;
-    letter-spacing: -0.01em;
-  }
-
-  .state-badge {
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-  }
-
-  .state-badge.recording {
-    color: #fff;
-    background: var(--danger);
-    border-color: var(--danger);
-  }
-
-  .state-badge.starting,
-  .state-badge.stopping {
-    color: var(--warn);
-    border-color: var(--warn);
-  }
-
-  .state-badge.error {
-    color: var(--danger);
-    border-color: var(--danger);
-  }
-
-  .controls-row {
+  .topbar-right {
     display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 4px 14px 10px;
-    user-select: none;
-    -webkit-user-select: none;
+    align-items: center;
+    gap: 16px;
+    margin-left: auto;
   }
 
-  .spacer {
+  .levels {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    width: 280px;
+  }
+
+  .workspace {
     flex: 1;
+    min-height: 0;
+    display: flex;
   }
 
-  .meters {
+  /* Flat panes separated by a single hairline — no boxes. */
+  .pane {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
     display: flex;
-    gap: 24px;
-    padding: 0 14px 10px;
+    flex-direction: column;
+  }
+
+  .pane.tabs {
+    border-left: 1px solid var(--border-soft);
   }
 </style>

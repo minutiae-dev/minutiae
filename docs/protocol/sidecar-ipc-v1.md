@@ -21,10 +21,10 @@ Lifecycle coupling: EOF on the engine's stdin means shut down cleanly (stop any 
 
 | type | fields | notes |
 |---|---|---|
-| `hello` | `id` | first message after spawn |
-| `prepare_models` | `id` | ensure the engine's ASR models are downloaded, compiled and loaded. Idempotent; safe to call when already ready. The core sends this automatically after the handshake when `hello_ack.models_ready` is `false`, so the download happens at launch rather than at first `start_session`. Progress streams as `model_progress`; completion is the correlated `models_ready` response, failure an `error` (`model_download_failed`). |
+| `hello` | `id`, `engine?` | first message after spawn. `engine` is optional (additive) and names the user's selected model, e.g. `"nemotron-streaming-en"`, so `hello_ack.models_ready` reports on that variant instead of the engine default; omitted ⇒ the engine default. |
+| `prepare_models` | `id`, `engine?`, `language?` | ensure the engine's ASR models are downloaded, compiled and loaded. Idempotent; safe to call when already ready. The core sends this automatically after the handshake when `hello_ack.models_ready` is `false`, so the download happens at launch rather than at first `start_session`. `engine`/`language` are optional (additive) and select which model to prepare, e.g. `"parakeet-tdt-v3"` / `"auto"`; omitted ⇒ the engine default. Progress streams as `model_progress`; completion is the correlated `models_ready` response, failure an `error` (`model_download_failed`). |
 | `list_devices` | `id` | input (mic) devices |
-| `start_session` | `id`, `session_id`, `dir`, `mic_device_uid`, `engine`, `language` | `dir` is an existing, writable session folder; `engine` is an engine id, e.g. `"parakeet-tdt-v3"`; `language` BCP-47-ish, e.g. `"en"` |
+| `start_session` | `id`, `session_id`, `dir`, `mic_device_uid`, `engine`, `language`, `them_source?` | `dir` is an existing, writable session folder; `engine` is an engine id: `"parakeet-tdt-v3"` (batch Parakeet TDT, multilingual, the default), `"nemotron-streaming-ml"` or `"nemotron-streaming-en"`; `language` BCP-47-ish, e.g. `"auto"` or `"en"`. `them_source` selects the "them" channel: `"system"` (default, the system-audio process tap) or an input-device UID to capture that device directly (e.g. a loopback like BlackHole). Omitted ⇒ `"system"`. |
 | `stop_session` | `id` | stops the active session; finalization is async — completion is signalled by `session_stopped` |
 | `ping` | `id` | health check |
 | `shutdown` | — | graceful exit; equivalent to stdin EOF |
@@ -33,14 +33,14 @@ Lifecycle coupling: EOF on the engine's stdin means shut down cleanly (stop any 
 
 | type | fields | notes |
 |---|---|---|
-| `hello_ack` | `id`, `protocol_version`, `engine_versions`, `models_ready` | `engine_versions: {"parakeet-tdt-v3": "<semver/model rev>"}`; `models_ready: bool` (models already in the local cache) |
+| `hello_ack` | `id`, `protocol_version`, `engine_versions`, `models_ready` | `engine_versions: {"parakeet-tdt-v3": "<semver/model rev>", "nemotron-streaming-ml": "…", "nemotron-streaming-en": "…"}`; `models_ready: bool` (the model named by `hello.engine`, else the default, is completely present in the local cache — every required CoreML artifact, not just its metadata) |
 | `models_ready` | `id` | correlated response to `prepare_models`: models are now downloaded, compiled and loaded |
-| `devices` | `id`, `items` | `items: [{uid, name, sample_rate, is_default}]` |
+| `devices` | `id`, `items`, `output?` | `items: [{uid, name, sample_rate, is_default}]`. `output` is optional (additive): `{name, transport, route}` describing the current media **output** device, where `route` is `"speakers"` \| `"headphones"` \| `"unknown"` — the engine's advisory read on whether the far end also reaches the mic acoustically, so the UI can suggest a headset before recording. Deliberately reports `"unknown"` when ambiguous. **Never** a gate for echo suppression, which decides from envelope correlation. |
 | `session_started` | `id`, `session_id`, `t0_epoch_ms` | `t0_epoch_ms` anchors session-relative seconds to wall clock |
 | `model_progress` | `pct`, `stage` | emitted during model download/compile (driven by `prepare_models` at launch, or by `start_session` as a fallback); `stage`: `"downloading" \| "compiling"` |
 | `transcript` | `session_id`, `segment` | see Segment below |
 | `levels` | `session_id`, `me_db`, `them_db` | ~10 Hz while recording; dBFS floats (≤ 0, −120 = silence) |
-| `session_stopped` | `id`, `session_id`, `audio`, `stats` | `audio: [{channel, path, codec, container, duration_s, sample_rate}]`; `stats: {segments, dropped_windows}` |
+| `session_stopped` | `id`, `session_id`, `audio`, `stats` | `audio: [{channel, path, codec, container, duration_s, sample_rate, source_sample_rate?}]`; `stats: {segments, dropped_windows}`. `sample_rate` is the rate of the **file** (the recording is encoded at 16 kHz, or the capture rate if lower); `source_sample_rate` is optional (additive) and reports what the **capture device** delivered, which is what the core stores as the session's device metadata. Omitted ⇒ assume it equals `sample_rate`. |
 | `error` | `code`, `message`, `fatal`, `session_id?` | see Error codes |
 | `pong` | `id` | |
 

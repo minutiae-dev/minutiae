@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 
 /// Thread-safe Float32 ring buffer for the ASR feed. Lock-based — at 16 kHz
@@ -75,6 +76,75 @@ public final class RingBuffer: @unchecked Sendable {
             guard let base = buf.baseAddress else { return }
             append(base, count: n)
         }
+    }
+
+    /// Mean of squares of the oldest `windowCount` samples, computed IN PLACE.
+    /// Returns nil if fewer than that many are buffered.
+    ///
+    /// This is what lets a silent window cost nothing: the transcriber can gate
+    /// on it and then just `advance`, instead of copying 80 000 floats out of
+    /// the ring only to throw them away.
+    public func windowMeanSquare(count windowCount: Int) -> Float? {
+        lock.lock(); defer { lock.unlock() }
+        guard count >= windowCount, windowCount > 0 else { return nil }
+        let cap = storage.count
+        var total: Float = 0
+        storage.withUnsafeBufferPointer { src in
+            var idx = head
+            var remaining = windowCount
+            while remaining > 0 {
+                let chunk = min(remaining, cap - idx)
+                var mean: Float = 0
+                vDSP_measqv(src.baseAddress! + idx, 1, &mean, vDSP_Length(chunk))
+                total += mean * Float(chunk)
+                idx = (idx + chunk) % cap
+                remaining -= chunk
+            }
+        }
+        return total / Float(windowCount)
+    }
+
+    /// Mean of squares for each whole `blockSize` block starting `startOffset`
+    /// samples after the oldest sample, computed IN PLACE, up to `maxBlocks`.
+    ///
+    /// The utterance segmenter needs the buffer's envelope on every pump.
+    /// Computing it here means one lock and one vDSP pass per block instead of
+    /// copying the audio out to look at it; taking a `startOffset` means the
+    /// caller only ever pays for blocks it has not already classified.
+    public func blockMeanSquares(blockSize: Int, startOffset: Int = 0, maxBlocks: Int) -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        guard blockSize > 0, maxBlocks > 0, startOffset >= 0 else { return [] }
+        let n = min(maxBlocks, (count - startOffset) / blockSize)
+        guard n > 0 else { return [] }
+        var out = [Float](repeating: 0, count: n)
+        let cap = storage.count
+        storage.withUnsafeBufferPointer { src in
+            guard let base = src.baseAddress else { return }
+            var idx = (head + startOffset) % cap
+            for b in 0..<n {
+                var total: Float = 0
+                var remaining = blockSize
+                while remaining > 0 {
+                    let chunk = min(remaining, cap - idx)
+                    var mean: Float = 0
+                    vDSP_measqv(base + idx, 1, &mean, vDSP_Length(chunk))
+                    total += mean * Float(chunk)
+                    idx = (idx + chunk) % cap
+                    remaining -= chunk
+                }
+                out[b] = total / Float(blockSize)
+            }
+        }
+        return out
+    }
+
+    /// Discards the oldest `n` samples without copying them out.
+    public func advance(by n: Int) {
+        guard n > 0 else { return }
+        lock.lock(); defer { lock.unlock() }
+        let step = min(n, count)
+        head = (head + step) % storage.count
+        count -= step
     }
 
     /// Returns the oldest `count` samples without removing them all: the read
