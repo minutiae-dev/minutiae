@@ -1,5 +1,7 @@
 # Minutiae — agent notes
 
+Human-facing docs: `README.md`, `CONTRIBUTING.md`, `docs/architecture.md`. This file is the terse version for agents and must stay consistent with them.
+
 Local-first macOS meeting notepad. Tauri 2 (Rust core + Svelte 5) with a Swift sidecar (`engine/`) that owns audio capture and on-device ASR (FluidAudio / Parakeet TDT v3 on the Neural Engine).
 
 ## Invariants — do not violate

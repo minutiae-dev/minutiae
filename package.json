@@ -1,6 +1,8 @@
 {
   "name": "minutiae-workspace",
   "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@10.17.1",
   "scripts": {
     "dev": "pnpm --filter minutiae tauri dev",
     "build": "pnpm --filter minutiae tauri build",

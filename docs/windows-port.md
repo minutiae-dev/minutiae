@@ -1,6 +1,6 @@
 # Windows port — design
 
-Status: **proposed** (no code yet). Targets the M-series "Windows port" milestone in `milestones.md`.
+Status: **phase 1 implemented** in `../engine-windows/` (IPC seam, device enumeration, stub ASR; see its README). Capture, ASR and session writing are phase 2. Targets milestone M6 in `milestones.md`.
 
 Minutiae's macOS build is a Tauri app (Rust core + Svelte) driving a **Swift sidecar** (`engine/`) that owns audio capture and on-device ASR. The Windows port keeps the Rust core, the Svelte UI, and the `sidecar-ipc-v1` wire protocol **unchanged**, and replaces only the sidecar with a native Windows implementation.
 

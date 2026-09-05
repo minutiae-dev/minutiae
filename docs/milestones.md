@@ -1,6 +1,6 @@
 # Milestones
 
-## M1 — Capture + live transcript (weeks 1–3) — IN PROGRESS
+## M1 — Capture + live transcript — DONE
 
 From `pnpm dev`: pick mic → start (<1 s) → live two-channel ("Me"/"Them") transcript with level meters during a real Zoom and Meet-in-Chrome call on AirPods → stop → session folder with valid `session.json`, `transcript.json`, two playable Opus/CAF files. Zero transcript text during silence. Sidecar crash mid-session leaves a readable partial transcript. Risk matrix (apps × audio routes × hot-switch/drift) has no red cells in the Zoom/Meet/AirPods rows.
 
@@ -9,7 +9,7 @@ Checkpoints:
 - **B (risk gate)** — record a Zoom call; both WAVs non-empty, clap-test cross-channel alignment ≤ 50 ms. If process taps fail → re-route to ScreenCaptureKit audio behind the same `SystemAudioTap` interface.
 - **C** — YouTube in Safari while talking: correct channel attribution, zero segments during 60 s of silence, start < 1 s with TCC pre-granted.
 
-## M2 — Scratchpad + enhancement — IN PROGRESS
+## M2 — Scratchpad + enhancement — DONE
 
 Scratchpad editor saved to `scratchpad.md`; enhancement pipeline merges scratchpad + transcript → Markdown + YAML frontmatter into the user-chosen vault folder. The session format is its input contract.
 
@@ -27,7 +27,7 @@ Build sequence:
    - ✅ `scripts/build-llm-sidecar.sh` — xcodebuild → installs binary **+** metallib bundle into `target/<profile>/` (so `pnpm dev` can spawn it) and stashes a copy in `binaries/`. Kept out of the dev `beforeDevCommand` (the MLX build is slow). Capability entries added. **Bundling into the signed `.app` (externalBin + tauri#11992 signing) is deferred to M5.**
 5. ✅ **Enhancement pipeline** (`LlmManager` + `enhance_session`/`cancel_enhance` commands + `EnhancePanel.svelte`) — reads `transcript.json` + `scratchpad.md`, assembles a `/no_think` summarization prompt, streams tokens to the UI (`llm:progress`/`llm:token`/`llm:done`/`llm:error`), strips any leaked `<think>` block, and writes `<Title>.md` with YAML frontmatter from `session.json` into the vault (collision-safe filenames). Pure helpers (prompt/slug/frontmatter/transcript-render) unit-tested.
 
-   **End-to-end smoke test still pending:** run `scripts/build-llm-sidecar.sh release`, then `pnpm dev`, finish a session with a vault set, and click *Enhance* to confirm the first-run model download → stream → vault write path on-device.
+   The end-to-end path (first-run model download → stream → vault write) is verified on-device; `scripts/build-llm-sidecar.sh release` then `pnpm dev` reproduces it.
 
 ## M3 — Templates + calendar
 
@@ -37,13 +37,13 @@ Templates as Markdown files (frontmatter + prompt body) in a `templates/` dir, p
 
 `rusqlite` + FTS5 index over transcripts/notes — derived data, rebuildable, never authoritative (`sqlite-vec` later for semantic search). Pyannote-via-FluidAudio splits the "them" channel into speakers (`them:spk1`…), click-to-name in the transcript; optional full-accuracy batch re-pass at meeting end. `schema_version` bump.
 
-## M5 — Packaging
+## M5 — Packaging — PARTIAL
 
-Hardened runtime, notarization, bundled CoreML models + FluidAudio `enforceOffline` (true 100%-offline out of box), updater decision, externalBin signing resolved for real (tauri#11992). Then private beta (~20 users, no instrumentation — interviews).
+Done: hardened runtime, Developer ID signing, notarization, stapling and a DMG (`docs/signed-build.md`, `scripts/sign-and-notarize.sh`, `scripts/make-dmg.sh`), with the LLM sidecar injected post-build. Remaining: bundled CoreML models + FluidAudio `enforceOffline` (true 100%-offline out of box), updater decision, externalBin signing resolved for real (tauri#11992). Then private beta (~20 users, no instrumentation — interviews).
 
-## M6 — Windows port
+## M6 — Windows port — PHASE 1 DONE
 
-Bring capture + live transcript to Windows by replacing **only the sidecar**; the Rust core, Svelte UI, `sidecar-ipc-v1` protocol, and session-on-disk format stay unchanged. Full design: `docs/windows-port.md`.
+Phase 1 (IPC seam, device enumeration, stub ASR) ships in `engine-windows/`; see its README. Phase 2 (capture, ASR, session writing) is open. Bring capture + live transcript to Windows by replacing **only the sidecar**; the Rust core, Svelte UI, `sidecar-ipc-v1` protocol, and session-on-disk format stay unchanged. Full design: `docs/windows-port.md`.
 
 - **New Rust sidecar** (`engine-windows/` → `minutiae-engine-x86_64-pc-windows-msvc.exe`) — Tauri's `externalBin` resolves the target-triple suffix, so no core/config change. Module layout mirrors Swift `EngineCore` (capture / asr / ipc / session / util) so the two platforms stay legible side by side.
 - **Capture: WASAPI.** "Me" = shared-mode mic; "Them" = **per-process loopback** (`ActivateAudioInterfaceAsync` + `AUDIOCLIENT_ACTIVATION_PARAMS`, Win 10 build 20348+/Win 11) — the analog of the macOS process tap, behind the same `AudioCaptureSource` seam. Record native rate; resample only the ASR feed.
