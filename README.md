@@ -1,5 +1,7 @@
 # Minutiae
 
+**The privacy-first AI notetaker for productive meetings.** — [minutiae.dev](https://minutiae.dev)
+
 Local-first meeting notepad for macOS. Minutiae captures your mic and the
 other side of the call without a meeting bot, shows a live two-channel
 transcript beside your notes, and, when the meeting ends, turns both into a
