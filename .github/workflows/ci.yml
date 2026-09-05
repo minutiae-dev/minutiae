@@ -64,3 +64,18 @@ jobs:
 
       - name: UI type check
         run: pnpm --filter minutiae check
+
+      - name: Install test browsers
+        run: pnpm --filter minutiae exec playwright install chromium webkit
+
+      - name: Browser UI tests (OSS fixtures)
+        run: pnpm --filter minutiae test:ui
+
+      # Drives the real Rust commands through a WebDriver session against a
+      # dedicated `native-test` build: synthetic sidecar, temporary data dir,
+      # no microphone, no model download, no network.
+      - name: Build the native smoke app
+        run: pnpm --filter minutiae build:native-test
+
+      - name: Native smoke test (WebDriver)
+        run: pnpm --filter minutiae test:native

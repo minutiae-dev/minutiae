@@ -181,15 +181,15 @@ pub fn delete_session(
         .filter(|s| !s.is_empty());
 
     let vault = settings.get().vault_dir.map(std::path::PathBuf::from);
+    #[cfg(feature = "saas")]
+    if let Some(id) = &session_id {
+        if path.canonicalize().map_err(|e| e.to_string())?.parent() != Some(root.canonicalize().map_err(|e| e.to_string())?.as_path()) {
+            return Err("session must be inside the sessions directory".into());
+        }
+        crate::saas::sync::queue_delete(&app, &path, id)?;
+    }
     history::delete_session(&root, &path, vault.as_deref())?;
 
-    #[cfg(feature = "saas")]
-    if let Some(id) = session_id {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            crate::saas::sync::delete_remote(&app, &id).await;
-        });
-    }
     // `app` is only read in SaaS builds; silence the warning in OSS builds.
     let _ = &app;
     Ok(())

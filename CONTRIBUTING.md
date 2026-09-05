@@ -52,12 +52,39 @@ swift test --package-path engine                       # engine: DSP, segmentati
 cargo test --manifest-path app/src-tauri/Cargo.toml    # core: protocol, session, history, settings, llm
 cargo test --manifest-path engine-windows/Cargo.toml   # Windows sidecar, portable parts
 pnpm --filter minutiae check                           # svelte-check over the UI
+pnpm --filter minutiae test:ui                         # the UI in a real browser, against fixtures
 ```
 
 The core's build script checks that the engine sidecar binary exists, so run
 `pnpm sidecar:build` (or `pnpm dev`) once before `cargo test` on a fresh clone.
 
-There is no JavaScript test runner; `svelte-check` is the only UI check.
+### The UI tests
+
+`test:ui` runs Playwright (Chromium + WebKit) against `pnpm dev:ui-fixtures` — a
+development-only Vite mode where `src/lib/transport.ts` swaps every Tauri
+`invoke`, event listener and file dialog for the deterministic fixtures in
+`src/lib/fixtures.ts`. Fixture mode requires *both* a dev build and
+`--mode ui-fixtures`, so a production bundle cannot be talked into it. Add
+`test:ui:headed` to watch it, or run `dev:ui-fixtures` and click around
+yourself. Prefer accessible selectors (`getByRole`) over CSS.
+
+There is no unit-test runner for the UI: a Svelte component that is worth
+testing is worth testing through the app.
+
+### The native smoke test
+
+```sh
+pnpm --filter minutiae build:native-test   # a separate app: `native-test` feature
+pnpm --filter minutiae test:native         # WebdriverIO drives it
+```
+
+This one is the real Rust core — real commands, real session folders — with only
+the two things a test must not touch replaced: the engine is a synthetic NDJSON
+sidecar (`tests/native/sidecar.py`) and the data directory is a fresh temp dir
+the build refuses to start without. So it catches what fixtures cannot (a
+command that no longer exists, a session that never reaches disk) without ever
+opening the microphone, downloading a model, or touching your meetings.
+Microphone capture, TCC prompts and OAuth stay manual checks on a real Mac.
 
 Heavier suites are opt-in through environment variables and skip otherwise:
 
@@ -115,7 +142,7 @@ Both sides have round-trip tests; add a case for any new message.
 ## Pull requests
 
 - Keep PRs focused. A refactor and a behaviour change are two PRs.
-- Run the four test commands above before opening a PR; CI runs the same.
+- Run the test commands above before opening a PR; CI runs the same.
 - Describe what changed and why in the PR body. If you measured something
   (CPU, memory, ANE calls), include the numbers and how you got them; the
   table in `docs/architecture.md` says what to compare against.

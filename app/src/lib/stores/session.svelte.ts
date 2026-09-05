@@ -1,6 +1,6 @@
 // Svelte 5 runes state for the single capture screen.
 
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../transport";
 
 import {
   cancelEnhance,

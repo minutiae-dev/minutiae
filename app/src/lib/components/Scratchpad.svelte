@@ -13,6 +13,7 @@
   </div>
   <textarea
     class="editor"
+    aria-label="Meeting notes"
     placeholder={session.notesActive
       ? "Jot down notes — saved with this session, used to enhance it later."
       : "Start a session to take notes."}

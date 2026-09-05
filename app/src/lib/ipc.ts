@@ -6,15 +6,15 @@
 //   - protocol:  app/src-tauri/src/protocol.rs (docs/protocol/sidecar-ipc-v1.md)
 // Change them together.
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke, listen, fixtureMode } from "./transport";
+import { type UnlistenFn } from "@tauri-apps/api/event";
 
 /**
  * False when the page is served outside the Tauri webview (e.g. `vite` run
  * directly and opened in a browser) — there is no backend to invoke then.
  */
 export function isTauri(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return fixtureMode || "__TAURI_INTERNALS__" in window;
 }
 
 // ---------------------------------------------------------------------------

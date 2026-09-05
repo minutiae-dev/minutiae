@@ -58,6 +58,10 @@ pub struct SessionDetail {
 /// a recovered stub over the real session.
 pub fn list_sessions(root: &Path, vault_dir: Option<&Path>) -> std::io::Result<Vec<SessionSummary>> {
     let enhanced = vault_dir.map(enhanced_index).unwrap_or_default();
+    list_sessions_indexed(root, &enhanced)
+}
+
+pub(crate) fn list_sessions_indexed(root: &Path, enhanced: &HashMap<String, PathBuf>) -> std::io::Result<Vec<SessionSummary>> {
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         // No sessions folder yet — a fresh install, not a failure.
@@ -104,7 +108,7 @@ pub fn list_sessions(root: &Path, vault_dir: Option<&Path>) -> std::io::Result<V
 
         let session_id = meta.session_id.clone().unwrap_or_default();
         let summary = SessionSummary {
-            has_enhanced: !session_id.is_empty() && enhanced.contains_key(&session_id),
+            has_enhanced: !session_id.is_empty() && (enhanced.contains_key(&session_id) || dir.join("enhanced.md").is_file()),
             session_id: session_id.clone(),
             dir: dir.to_string_lossy().into_owned(),
             title: meta.title(),
@@ -200,14 +204,17 @@ pub fn is_ulid(s: &str) -> bool {
 
 /// Load a single session's transcript, notes, and (if any) enhanced note.
 pub fn load_session(dir: &Path, vault_dir: Option<&Path>) -> Result<SessionDetail, String> {
+    let enhanced = vault_dir.map(enhanced_index).unwrap_or_default();
+    load_session_indexed(dir, &enhanced)
+}
+
+pub(crate) fn load_session_indexed(dir: &Path, enhanced: &HashMap<String, PathBuf>) -> Result<SessionDetail, String> {
     let meta = SessionMeta::read(dir).map_err(|e| e.to_string())?;
     let session_id = meta.session_id.clone().unwrap_or_default();
     let segments = read_segments(dir);
     let scratchpad = std::fs::read_to_string(dir.join("scratchpad.md")).unwrap_or_default();
 
-    let (enhanced_markdown, enhanced_file) = vault_dir
-        .filter(|_| !session_id.is_empty())
-        .and_then(|v| enhanced_index(v).remove(&session_id))
+    let (enhanced_markdown, enhanced_file) = enhanced.get(&session_id)
         .map(|path| {
             let body = std::fs::read_to_string(&path)
                 .ok()
@@ -217,7 +224,7 @@ pub fn load_session(dir: &Path, vault_dir: Option<&Path>) -> Result<SessionDetai
                 .map(|f| f.to_string_lossy().into_owned());
             (body, file)
         })
-        .unwrap_or((None, None));
+        .unwrap_or_else(|| (std::fs::read_to_string(dir.join("enhanced.md")).ok(), None));
 
     Ok(SessionDetail {
         dir: dir.to_string_lossy().into_owned(),
@@ -350,7 +357,7 @@ fn read_segments(dir: &Path) -> Vec<Segment> {
 /// Map `session_id` → enhanced-note path by scanning the vault's `*.md`
 /// frontmatter. On collisions (re-enhanced sessions write `-N` variants) keep
 /// the most recently modified file.
-fn enhanced_index(vault: &Path) -> HashMap<String, PathBuf> {
+pub(crate) fn enhanced_index(vault: &Path) -> HashMap<String, PathBuf> {
     let mut map: HashMap<String, PathBuf> = HashMap::new();
     let Ok(entries) = std::fs::read_dir(vault) else {
         return map;

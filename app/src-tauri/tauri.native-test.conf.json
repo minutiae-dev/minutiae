@@ -1,0 +1,11 @@
+{
+  "identifier": "com.minutiae.native-test",
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": ["default", {"identifier": "native-test", "windows": ["main"], "permissions": ["wdio:default", "wdio-webdriver:default"]}]
+    }
+  },
+  "build": {"beforeBuildCommand": "pnpm exec vite build --mode native-test", "devUrl": null},
+  "bundle": {"active": false}
+}

@@ -17,6 +17,22 @@ mod sidecar;
 
 use tauri::Manager;
 
+#[cfg(all(feature = "native-test", feature = "saas"))]
+compile_error!("native smoke builds must not connect to real SaaS accounts");
+
+pub(crate) fn data_dir(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
+    #[cfg(feature = "native-test")]
+    {
+        let _ = app;
+        let path = std::path::PathBuf::from(std::env::var("MINUTIAE_TEST_DATA_DIR").expect("native-test requires an isolated data directory"));
+        assert!(path.is_absolute() && path.join(".native-test").is_file(), "native-test directory must be explicitly prepared");
+        return Ok(path);
+    }
+    #[cfg(not(feature = "native-test"))]
+    app.path().data_dir()
+}
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -30,6 +46,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init());
+    #[cfg(feature = "native-test")]
+    let builder = builder.plugin(tauri_plugin_wdio::init()).plugin(tauri_plugin_wdio_webdriver::init());
     // Deep-link plugin handles the prod OAuth redirect (minutiae://oauth/callback).
     #[cfg(feature = "saas")]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
@@ -37,9 +55,7 @@ pub fn run() {
     builder
         .setup(|app| {
             // Settings live next to sessions under the app data dir.
-            let settings_path = app
-                .path()
-                .data_dir()?
+            let settings_path = data_dir(app.handle())?
                 .join("Minutiae")
                 .join("settings.json");
             app.manage(settings::SettingsState::load(settings_path));
@@ -129,7 +145,13 @@ pub fn run() {
             #[cfg(feature = "saas")]
             saas::auth::saas_account_status,
             #[cfg(feature = "saas")]
+            saas::cloud_backend::saas_cloud_usage,
+            #[cfg(feature = "saas")]
             saas::sync::saas_sync_now,
+            #[cfg(feature = "saas")]
+            saas::sync::saas_import_local_sessions,
+            #[cfg(feature = "saas")]
+            saas::sync::saas_restore_conflict,
             #[cfg(feature = "saas")]
             saas::sync::saas_sync_status,
             #[cfg(feature = "saas")]

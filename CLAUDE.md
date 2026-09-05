@@ -48,6 +48,16 @@ swift test --package-path engine
 cargo test --manifest-path app/src-tauri/Cargo.toml
 scripts/build-sidecar.sh [release]                  # → app/src-tauri/binaries/minutiae-engine-aarch64-apple-darwin
 
+# UI, in a real browser against fixtures (Chromium + WebKit). `dev:ui-fixtures`
+# is a dev-only Vite mode where `src/lib/transport.ts` swaps invoke/listen/dialog
+# for `src/lib/fixtures.ts`; a production bundle cannot enable it.
+pnpm --filter minutiae test:ui                      # add :headed to watch it
+pnpm --filter minutiae dev:ui-fixtures              # click around yourself
+
+# The real Rust core through WebDriver: real commands, real session folders,
+# synthetic NDJSON sidecar, temp data dir the build refuses to start without.
+pnpm --filter minutiae build:native-test && pnpm --filter minutiae test:native
+
 # Resource benchmark (opt-in): CPU/s per session-minute, footprint growth,
 # bytes on disk, stop latency and ANE seconds, for a synthetic session driven
 # ~150x realtime through the real pipeline with a stub ASR.

@@ -182,6 +182,12 @@ impl SidecarManager {
             let mut session = shared.session.lock().unwrap();
             session.begin_starting(&sessions_root, mic, engine, language)?
         };
+        #[cfg(feature = "saas")]
+        if let Some(subject) = shared.app.try_state::<crate::saas::AuthManager>().and_then(|a| a.subject()) {
+            if let Err(error) = crate::settings::write_atomic(&start.dir.join("sync-owner"), subject.as_bytes()) {
+                tracing::error!("meeting remains local because ownership could not be saved: {error}");
+            }
+        }
         // Focus this session for scratchpad notes (and M2 enhancement). A new
         // start replaces it; a failed start clears it in `fail_active`.
         *shared.current_session_dir.lock().unwrap() = Some(start.dir.clone());
@@ -415,9 +421,7 @@ fn new_id() -> String {
 
 fn sessions_root(app: &AppHandle) -> Result<PathBuf, SidecarError> {
     // ~/Library/Application Support/Minutiae/sessions (docs/session-format.md)
-    let data_dir = app
-        .path()
-        .data_dir()
+    let data_dir = crate::data_dir(app)
         .map_err(|e| SidecarError::Other(format!("cannot resolve data dir: {e}")))?;
     Ok(data_dir.join("Minutiae").join("sessions"))
 }
@@ -574,11 +578,14 @@ async fn supervisor(shared: Arc<Shared>) {
 /// One engine process lifetime: spawn → handshake → event loop. Returns when
 /// the process dies or is declared dead (missed pongs / handshake timeout).
 async fn run_engine(shared: &Arc<Shared>, handshake_ok: &mut bool) -> Result<(), String> {
+    #[cfg(not(feature = "native-test"))]
     let command = shared
         .app
         .shell()
         .sidecar(SIDECAR_NAME)
         .map_err(|e| format!("sidecar command: {e}"))?;
+    #[cfg(feature = "native-test")]
+    let command = shared.app.shell().command("/usr/bin/python3").args([std::env::var("MINUTIAE_TEST_SIDECAR").expect("synthetic sidecar path required")]);
     let (mut rx, child) = command.spawn().map_err(|e| format!("spawn: {e}"))?;
     let pid = child.pid();
     tracing::info!(pid, "engine spawned");

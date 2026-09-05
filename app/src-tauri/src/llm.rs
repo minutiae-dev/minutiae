@@ -92,6 +92,7 @@ pub struct EnhanceRequest {
 pub enum EnhanceEvent {
     Progress { pct: f64, stage: ModelStage },
     Token(String),
+    Metadata { model: String, title: Option<String> },
     Done { finish_reason: FinishReason, stats: Stats },
     Failed { code: LlmErrorCode, message: String },
 }
@@ -238,12 +239,15 @@ impl LlmBackend for LocalSidecar {
             return Ok(());
         }
 
+        #[cfg(not(feature = "native-test"))]
         let command = self
             .shared
             .app
             .shell()
             .sidecar(LLM_SIDECAR_NAME)
             .map_err(|e| LlmError::Spawn(e.to_string()))?;
+        #[cfg(feature = "native-test")]
+        let command = self.shared.app.shell().command("/usr/bin/python3").args([std::env::var("MINUTIAE_TEST_SIDECAR").expect("synthetic sidecar path required"), "--llm".into()]);
         let (rx, child) = command.spawn().map_err(|e| LlmError::Spawn(e.to_string()))?;
         let pid = child.pid();
         tracing::info!(pid, "llm sidecar spawned");
@@ -551,6 +555,9 @@ pub struct LlmManager {
     /// True once the model is loaded into the sidecar this session (after a
     /// prepare or a successful enhance). Resets when the process dies.
     resident: std::sync::atomic::AtomicBool,
+    active_cloud: std::sync::atomic::AtomicBool,
+    cancelled: std::sync::atomic::AtomicBool,
+    operation_lock: tokio::sync::Mutex<()>,
 }
 
 /// What the `enhance_session` command gets back.
@@ -567,6 +574,9 @@ impl LlmManager {
             cloud: crate::saas::CloudBackend::new(app.clone()),
             app,
             resident: std::sync::atomic::AtomicBool::new(false),
+            active_cloud: std::sync::atomic::AtomicBool::new(false),
+            cancelled: std::sync::atomic::AtomicBool::new(false),
+            operation_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -581,7 +591,7 @@ impl LlmManager {
     /// else the local sidecar).
     async fn enhance_backend(&self, req: EnhanceRequest) -> Result<EnhanceHandle, LlmError> {
         #[cfg(feature = "saas")]
-        if self.cloud_selected() {
+        if self.active_cloud.load(std::sync::atomic::Ordering::SeqCst) {
             return self.cloud.enhance(req).await;
         }
         self.local.enhance(req).await
@@ -590,7 +600,7 @@ impl LlmManager {
     /// Cancel the active transport's in-flight generation.
     async fn cancel_backend(&self) -> Result<(), LlmError> {
         #[cfg(feature = "saas")]
-        if self.cloud_selected() {
+        if self.active_cloud.load(std::sync::atomic::Ordering::SeqCst) {
             return self.cloud.cancel().await;
         }
         self.local.cancel().await
@@ -645,6 +655,10 @@ impl LlmManager {
         vault_dir: PathBuf,
         thinking: bool,
     ) -> Result<EnhancedDoc, LlmError> {
+        let _operation = self.operation_lock.try_lock().map_err(|_| LlmError::Other("an enhancement is already running".into()))?;
+        self.cancelled.store(false, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(feature = "saas")]
+        self.active_cloud.store(self.cloud_selected(), std::sync::atomic::Ordering::SeqCst);
         let session = SessionMeta::read(&session_dir)?;
         let transcript = read_transcript(&session_dir)?;
         if transcript.trim().is_empty() {
@@ -664,7 +678,8 @@ impl LlmManager {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .map(str::to_string);
-        let title = match existing {
+        let mut title = match existing {
+            None if self.active_cloud.load(std::sync::atomic::Ordering::SeqCst) => session.title(),
             Some(t) => t,
             None => match self.generate_title(&transcript, &scratchpad).await {
                 Some(t) => {
@@ -677,6 +692,9 @@ impl LlmManager {
             },
         };
 
+        if self.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(LlmError::Cancelled);
+        }
         let prompt = build_prompt(&transcript, &scratchpad);
         // Sampling (temperature/top_p/…) is the model card's per-mode preset,
         // applied in the sidecar; we leave temperature unset to use it.
@@ -699,6 +717,7 @@ impl LlmManager {
         tracing::info!(request_id = %handle.request_id, "enhancement streaming");
         let mut events = handle.events;
         let mut body = String::new();
+        let mut result_model = DEFAULT_LLM_MODEL.to_string();
         let stats = loop {
             match events.recv().await {
                 Some(EnhanceEvent::Progress { pct, stage }) => {
@@ -709,6 +728,14 @@ impl LlmManager {
                             stage: stage_str(stage).into(),
                         },
                     );
+                }
+                Some(EnhanceEvent::Metadata { model, title: generated }) => {
+                    result_model = model;
+                    if session.title.as_deref().unwrap_or("").trim().is_empty() {
+                        if let Some(generated) = generated.and_then(|t| clean_title(&t)) {
+                            title = generated;
+                        }
+                    }
                 }
                 Some(EnhanceEvent::Token(text)) => {
                     body.push_str(&text);
@@ -739,7 +766,12 @@ impl LlmManager {
         };
         let tokens_per_s = stats.tokens_per_s;
 
-        let markdown = render_note(&session, &title, strip_think(&body), DEFAULT_LLM_MODEL);
+        if self.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(LlmError::Cancelled);
+        }
+        let cloud = self.active_cloud.load(std::sync::atomic::Ordering::SeqCst);
+        persist_title(&session_dir, &title)?;
+        let markdown = render_note(&session, &title, strip_think(&body), &result_model);
         let path = write_note(&vault_dir, &title, &markdown)?;
         // Refresh the raw-transcript note too, so the vault holds both the
         // enhanced note and a readable transcript under the same (now better)
@@ -752,8 +784,9 @@ impl LlmManager {
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
         tracing::info!(path = %path.display(), "enhanced note written");
-        self.resident
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if !cloud {
+            self.resident.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         let _ = self.app.emit(
             events::LLM_DONE,
             events::LlmDonePayload {
@@ -795,6 +828,7 @@ impl LlmManager {
                         },
                     );
                 }
+                EnhanceEvent::Metadata { .. } => {},
                 EnhanceEvent::Token(text) => body.push_str(&text),
                 EnhanceEvent::Done { finish_reason, .. } => {
                     if matches!(finish_reason, FinishReason::Cancelled) {
@@ -809,6 +843,7 @@ impl LlmManager {
     }
 
     pub async fn cancel(&self) -> Result<(), LlmError> {
+        self.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
         self.cancel_backend().await
     }
 

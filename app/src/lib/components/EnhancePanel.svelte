@@ -2,6 +2,7 @@
   import { Check, CircleCheck, Download, Sparkles } from "@lucide/svelte";
   import { session } from "../stores/session.svelte";
   import Markdown from "./Markdown.svelte";
+  import SaasMount from "../SaasMount.svelte";
   import Soundwave from "./Soundwave.svelte";
 
   // Why the Enhance button is disabled, for a helpful hint.
@@ -38,6 +39,7 @@
 </script>
 
 <div class="enhance">
+  <SaasMount name="CloudNotice" />
   {#if !session.llmDownloaded && !session.llmCloudActive}
     <!-- Model not on disk: explicit, one-time download (never auto-started).
          Cloud enrichment (SaaS) needs no local model, so it skips this card. -->

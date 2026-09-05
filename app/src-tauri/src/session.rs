@@ -188,8 +188,16 @@ impl SessionMachine {
     /// segment re-emitted with an existing `idx` replaces it in place.
     /// Segments for an unknown session id (or while not capturing) are
     /// ignored. May flush transcript.json (every 20 segments / 10 s).
+    ///
+    /// `Starting` counts as capturing: `session_started` is a *correlated*
+    /// response, handed to the waiting `start_session` task through a oneshot,
+    /// while transcript events are applied straight from the reader loop. An
+    /// engine that speaks the instant it acks therefore beats `mark_recording`
+    /// to the lock, and those opening segments used to be dropped. The
+    /// `active.session_id` guard below is what actually rejects a stale
+    /// segment; the phase check only has to say "a session exists".
     pub fn on_segment(&mut self, session_id: &str, segment: &Segment) -> Result<(), SessionError> {
-        if !matches!(self.phase, Phase::Recording | Phase::Stopping) {
+        if !matches!(self.phase, Phase::Starting | Phase::Recording | Phase::Stopping) {
             return Ok(());
         }
         let Some(active) = self.active.as_mut() else {
@@ -482,6 +490,35 @@ mod tests {
 
     fn read_json(path: &Path) -> Value {
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    /// The engine can ack `start_session` and speak in the same breath. That
+    /// ack travels through a oneshot to the waiting command task while the
+    /// segment is applied straight from the reader loop, so the segment can
+    /// win the race — and a meeting's opening words are exactly what a user
+    /// notices missing.
+    #[test]
+    fn segment_arriving_before_mark_recording_is_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let mut m = SessionMachine::new("0.1.0");
+        let info = m
+            .begin_starting(root.path(), mic(), "parakeet-tdt-v3", "en")
+            .unwrap();
+        assert_eq!(m.phase(), Phase::Starting);
+
+        m.on_segment(&info.session_id, &seg(0, true, "opening words"))
+            .unwrap();
+        m.on_segment("someone-else", &seg(1, true, "other session"))
+            .unwrap();
+        m.mark_recording(1_770_000_000_000).unwrap();
+
+        m.begin_stopping().unwrap();
+        let done = m.finalize(&audio(&info.dir), Utc::now()).unwrap();
+        assert_eq!(done.segments, 1);
+        let transcript = read_json(&info.dir.join("transcript.json"));
+        let segs = transcript["segments"].as_array().unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0]["text"], "opening words");
     }
 
     #[test]
