@@ -25,7 +25,23 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STASH="$ROOT/app/src-tauri/binaries"
-APP="${1:-$ROOT/app/src-tauri/target/release/bundle/macos/Minutiae.app}"
+SRC="$ROOT/app/src-tauri"
+
+# Cargo's target directory is not always app/src-tauri/target: a global
+# `target-dir` in ~/.cargo/config.toml (or CARGO_TARGET_DIR) redirects it, and
+# the bundle lands there instead. Ask cargo rather than assuming, or the release
+# scripts silently operate on a stale bundle -- or none at all.
+cargo_target_dir() {
+  local md
+  if md=$(cargo metadata --no-deps --format-version 1 \
+            --manifest-path "$SRC/Cargo.toml" 2>/dev/null); then
+    printf '%s' "$md" | /usr/bin/python3 -c \
+      'import sys,json; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null && return
+  fi
+  printf '%s' "$SRC/target"
+}
+
+APP="${1:-$(cargo_target_dir)/release/bundle/macos/Minutiae.app}"
 
 if [ ! -d "$APP" ]; then
   echo "error: app bundle not found: $APP" >&2
